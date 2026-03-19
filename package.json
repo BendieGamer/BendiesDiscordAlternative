@@ -1,0 +1,13 @@
+{
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^12.8.0",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
+    "http": "^0.0.1-security",
+    "jsonwebtoken": "^9.0.3",
+    "path": "^0.12.7",
+    "uuid": "^13.0.0",
+    "ws": "^8.19.0"
+  }
+}
