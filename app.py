@@ -390,7 +390,28 @@ input, textarea { font-family: inherit; outline: none; border: none; color: var(
 .modal h2 { font-size: 18px; font-weight: 700; margin-bottom: 14px; }
 .modal-acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
 
-/* Invite */
+/* DM sidebar tabs */
+.dm-side-tab { flex: 1; padding: 12px 8px; font-size: 13px; font-weight: 600; color: var(--text2); background: transparent; border: none; border-bottom: 2px solid transparent; cursor: pointer; font-family: inherit; transition: .12s; position: relative; }
+.dm-side-tab:hover { color: var(--text); background: var(--hover); }
+.dm-side-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+
+/* Friends in DM sidebar */
+.fr-dm-item { display: flex; align-items: center; gap: 9px; padding: 8px 10px; margin: 2px 6px; border-radius: 6px; cursor: pointer; color: var(--text2); transition: .12s; }
+.fr-dm-item:hover { background: var(--hover); color: var(--text); }
+.fr-dm-name { font-size: 13px; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fr-dm-status { font-size: 11px; color: var(--text3); }
+.fr-dm-acts { display: flex; gap: 3px; flex-shrink: 0; }
+.pending-item { display: flex; align-items: center; gap: 9px; padding: 9px 10px; margin: 2px 6px; border-radius: 6px; background: rgba(88,101,242,.08); border: 1px solid rgba(88,101,242,.2); }
+.pending-name { font-size: 13px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Add Friend modal */
+.add-friend-modal { text-align: center; padding: 8px 0; }
+.add-friend-modal .big-icon { font-size: 48px; margin-bottom: 12px; }
+.add-friend-modal h3 { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+.add-friend-modal p { color: var(--text2); font-size: 13px; margin-bottom: 20px; }
+.friend-search-result { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; background: var(--bg3); margin-bottom: 6px; transition: .12s; }
+.friend-search-result:hover { background: var(--bg4); }
+
 .invite-box { display: flex; align-items: center; gap: 8px; background: var(--bg3); border-radius: 8px; padding: 10px 12px; margin: 10px 0; }
 .invite-code { flex: 1; font-family: monospace; font-size: 18px; font-weight: 700; letter-spacing: 3px; color: var(--text); }
 
@@ -483,11 +504,17 @@ input, textarea { font-family: inherit; outline: none; border: none; color: var(
 
   <!-- Server rail -->
   <div id="rail">
-    <div class="rail-icon" id="dms-btn" title="DMs & Friends"
-         style="background:var(--accent);font-size:20px;position:relative"
+    <div class="rail-icon" id="dms-btn" title="Direct Messages"
+         style="background:#5865f2;font-size:20px;position:relative"
          onclick="showDMs()">
       💬
       <span class="badge hidden" id="dm-badge" style="font-size:9px;"></span>
+    </div>
+    <div class="rail-icon" id="friends-btn" title="Friends"
+         style="background:#3ba55c;font-size:20px;position:relative"
+         onclick="showFriendsView()">
+      👥
+      <span class="badge hidden" id="fr-badge" style="font-size:9px;"></span>
     </div>
     <div class="rail-div"></div>
     <div id="server-icons"></div>
@@ -513,14 +540,28 @@ input, textarea { font-family: inherit; outline: none; border: none; color: var(
 
   <!-- DM sidebar -->
   <div id="dm-side" class="hidden">
-    <div class="side-header" style="cursor:default;">
-      <span class="side-header-name">Direct Messages</span>
-      <button class="btn-xs btn-ghost" onclick="showNewDM()" style="padding:3px 8px;font-size:12px;border-radius:4px;background:transparent;border:1px solid var(--border);color:var(--text2);">✏️ New</button>
+    <div style="display:flex;border-bottom:1px solid var(--border);flex-shrink:0;">
+      <button id="dm-tab-msgs" class="dm-side-tab active" onclick="dmSideTab('msgs',this)">Messages</button>
+      <button id="dm-tab-friends" class="dm-side-tab" onclick="dmSideTab('friends',this)" style="position:relative;">
+        Friends
+        <span class="badge hidden" id="fr-badge2" style="font-size:9px;top:-2px;right:-2px;"></span>
+      </button>
     </div>
-    <div class="dm-search">
-      <input id="dm-search" class="inp" placeholder="🔍 Search conversations" oninput="filterDMs(this.value)">
+    <!-- Messages pane -->
+    <div id="dm-msgs-pane" style="display:flex;flex-direction:column;flex:1;overflow:hidden;">
+      <div class="dm-search">
+        <input id="dm-search" class="inp" placeholder="🔍 Search conversations" oninput="filterDMs(this.value)">
+      </div>
+      <div id="dm-list" style="flex:1;overflow-y:auto;"></div>
+      <button class="btn btn-ghost btn-sm" onclick="showNewDM()" style="margin:8px;justify-content:center;">✏️ New Message</button>
     </div>
-    <div id="dm-list"></div>
+    <!-- Friends pane -->
+    <div id="dm-friends-pane" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
+      <div style="padding:8px 10px;flex-shrink:0;display:flex;gap:6px;">
+        <button class="btn btn-primary btn-sm" style="flex:1;justify-content:center;" onclick="showAddFriendModal()">➕ Add Friend</button>
+      </div>
+      <div id="dm-fr-list" style="flex:1;overflow-y:auto;padding:4px 0;"></div>
+    </div>
     <div class="dm-lower">
       <div class="u-av" id="pan-av2" style="width:30px;height:30px;font-size:12px;"></div>
       <div style="flex:1;min-width:0;margin-left:8px;">
@@ -594,6 +635,26 @@ input, textarea { font-family: inherit; outline: none; border: none; color: var(
 </div>
 
 <!-- ── Overlays ── -->
+
+<!-- Incoming friend request popup -->
+<div id="fr-popup" style="display:none;position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:800;
+     background:var(--bg2);border:1px solid var(--green);border-radius:14px;
+     padding:16px 20px;min-width:320px;max-width:400px;box-shadow:0 16px 48px rgba(0,0,0,.7);
+     animation:popIn .2s ease;">
+  <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--green);margin-bottom:10px;">👋 Friend Request</div>
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+    <div id="frp-av" style="width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;color:#fff;flex-shrink:0;"></div>
+    <div>
+      <div id="frp-name" style="font-weight:700;font-size:15px;"></div>
+      <div style="font-size:12px;color:var(--text2);">wants to be your friend</div>
+    </div>
+  </div>
+  <div style="display:flex;gap:8px;">
+    <button class="btn btn-green" style="flex:1;" onclick="frpAccept()">✓ Accept</button>
+    <button class="btn btn-ghost" style="flex:1;" onclick="frpDecline()">✕ Decline</button>
+    <button class="btn btn-ghost btn-sm" onclick="frpDismiss()">Later</button>
+  </div>
+</div>
 
 <!-- Call overlay (incoming/outgoing) -->
 <div id="call-overlay">
@@ -985,6 +1046,7 @@ async function bootApp() {
   connectUserWs();
   askNotifPerm();
   loadNotifs();
+  loadFriendsSidebar();
   setView('welcome');
 }
 
@@ -1013,11 +1075,13 @@ function handlePush(msg) {
       S.pendingCount++;
       updatePendingBadge();
       loadNotifs();
-      toast('👋 Friend request from ' + msg.from.display_name, 'info');
+      // Show inline popup with Accept/Decline
+      showFriendRequestPopup(msg.from);
       notify('Friend Request', msg.from.display_name + ' wants to be friends');
       break;
     case 'friend_accepted':
       toast('✅ ' + msg.by.display_name + ' accepted your friend request', 'ok');
+      loadFriendsSidebar();
       break;
     case 'call_ring':
       S.callId = msg.callId; S.callRole = 'callee';
@@ -1052,6 +1116,19 @@ function updateDmBadge() {
   else b.classList.add('hidden');
 }
 function updatePendingBadge() {
+  // Rail badge on Friends button
+  const rb = document.getElementById('fr-badge');
+  if (rb) {
+    if (S.pendingCount > 0) { rb.textContent = S.pendingCount > 9 ? '9+' : S.pendingCount; rb.classList.remove('hidden'); }
+    else rb.classList.add('hidden');
+  }
+  // Sidebar tab badge
+  const sb = document.getElementById('fr-badge2');
+  if (sb) {
+    if (S.pendingCount > 0) { sb.textContent = S.pendingCount > 9 ? '9+' : S.pendingCount; sb.classList.remove('hidden'); }
+    else sb.classList.add('hidden');
+  }
+  // Old pending tab badge
   const tab = document.getElementById('fp-tab-pending'); if (!tab) return;
   let b = tab.querySelector('.fp-badge');
   if (S.pendingCount > 0) {
@@ -1382,8 +1459,10 @@ async function showDMs() {
   document.getElementById('dm-side').classList.remove('hidden');
   S.curSrv = null; renderServerIcons();
   S.dmUnread = 0; updateDmBadge();
+  dmSideTab('msgs', document.getElementById('dm-tab-msgs'));
   await loadDMs();
-  setView('friends'); fpTab('all', document.getElementById('fp-tab-all'));
+  setView('friends');
+  fpTab('all', document.getElementById('fp-tab-all'));
 }
 
 async function loadDMs() {
@@ -1591,6 +1670,7 @@ async function sendFriendReqInput() {
     ok.textContent = '✓ Request sent to ' + un + '!';
     document.getElementById('fadd-un').value = '';
     document.getElementById('fadd-results').innerHTML = '';
+    loadFriendsSidebar();
   } catch(e) { err.textContent = e.message; }
 }
 
@@ -1605,10 +1685,10 @@ async function quickAddFriend(userId, btn) {
   } catch(e) { toast(e.message, 'err'); }
 }
 
-async function acceptFriend(id)  { await apiFetch('POST', '/friends/' + id + '/accept'); renderFriends('pending'); }
-async function declineFriend(id) { await apiFetch('POST', '/friends/' + id + '/decline'); renderFriends('pending'); }
-async function cancelFriend(id)  { await apiFetch('DELETE', '/friends/' + id); renderFriends('pending'); }
-async function removeFriend(id)  { if (!confirm('Remove friend?')) return; await apiFetch('DELETE', '/friends/' + id); renderFriends('all'); }
+async function acceptFriend(id)  { await apiFetch('POST', '/friends/' + id + '/accept');  loadFriendsSidebar(); renderFriends('pending'); }
+async function declineFriend(id) { await apiFetch('POST', '/friends/' + id + '/decline'); loadFriendsSidebar(); renderFriends('pending'); }
+async function cancelFriend(id)  { await apiFetch('DELETE', '/friends/' + id);            loadFriendsSidebar(); renderFriends('pending'); }
+async function removeFriend(id)  { if (!confirm('Remove friend?')) return; await apiFetch('DELETE', '/friends/' + id); loadFriendsSidebar(); renderFriends('all'); }
 
 async function dmUser(username) {
   const r = await apiFetch('POST', '/dms/open', { username });
@@ -1906,7 +1986,247 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') { closeModal(); closeProfile(); closeNotifPanel(); }
 });
 
-// ── Auto-start ────────────────────────────────────────────────────────────────
+// ── Friend Request Popup ──────────────────────────────────────────────────────
+let _frpData = null; // { friendshipId, from }
+
+function showFriendRequestPopup(fromUser) {
+  _frpData = { from: fromUser };
+  const pop = document.getElementById('fr-popup');
+  const av  = document.getElementById('frp-av');
+  av.style.background = fromUser.avatar_color || '#5865f2';
+  av.textContent = (fromUser.display_name || '?')[0].toUpperCase();
+  document.getElementById('frp-name').textContent = fromUser.display_name || fromUser.username;
+  pop.style.display = 'block';
+  // Auto-dismiss after 30s
+  clearTimeout(_frpTimer);
+  _frpTimer = setTimeout(frpDismiss, 30000);
+}
+let _frpTimer = null;
+
+async function frpAccept() {
+  if (!_frpData) return;
+  try {
+    // Find the pending friendship ID
+    const friends = await apiFetch('GET', '/friends');
+    const fr = friends.find(f => f.other.id === _frpData.from.id && f.status === 'pending' && !f.is_requester);
+    if (fr) {
+      await apiFetch('POST', '/friends/' + fr.id + '/accept');
+      toast('✅ Now friends with ' + _frpData.from.display_name, 'ok');
+      loadFriendsSidebar();
+    }
+  } catch(e) { toast(e.message, 'err'); }
+  frpDismiss();
+}
+
+async function frpDecline() {
+  if (!_frpData) return;
+  try {
+    const friends = await apiFetch('GET', '/friends');
+    const fr = friends.find(f => f.other.id === _frpData.from.id && f.status === 'pending' && !f.is_requester);
+    if (fr) await apiFetch('POST', '/friends/' + fr.id + '/decline');
+    toast('Request from ' + _frpData.from.display_name + ' declined', 'info');
+    S.pendingCount = Math.max(0, S.pendingCount - 1);
+    updatePendingBadge();
+  } catch(e) { toast(e.message, 'err'); }
+  frpDismiss();
+}
+
+function frpDismiss() {
+  clearTimeout(_frpTimer);
+  document.getElementById('fr-popup').style.display = 'none';
+  _frpData = null;
+}
+
+// ── Friends View (dedicated) ──────────────────────────────────────────────────
+function showFriendsView() {
+  // Open DM sidebar on the Friends tab
+  document.getElementById('ch-side').style.display = 'none';
+  document.getElementById('dm-side').classList.remove('hidden');
+  S.curSrv = null; renderServerIcons();
+  dmSideTab('friends', document.getElementById('dm-tab-friends'));
+  setView('friends');
+  fpTab('all', document.getElementById('fp-tab-all'));
+  // Also update the sidebar friend list
+  loadFriendsSidebar();
+}
+
+function dmSideTab(tab, btn) {
+  document.querySelectorAll('.dm-side-tab').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  document.getElementById('dm-msgs-pane').style.display    = tab === 'msgs'    ? 'flex' : 'none';
+  document.getElementById('dm-friends-pane').style.display = tab === 'friends' ? 'flex' : 'none';
+  if (tab === 'friends') loadFriendsSidebar();
+}
+
+async function loadFriendsSidebar() {
+  try {
+    const friends = await apiFetch('GET', '/friends');
+    S.friends = friends;
+    const pending  = friends.filter(f => f.status === 'pending' && !f.is_requester);
+    const accepted = friends.filter(f => f.status === 'accepted');
+    S.pendingCount = pending.length;
+    updatePendingBadge();
+
+    const el = document.getElementById('dm-fr-list');
+    if (!el) return;
+    el.innerHTML = '';
+
+    // Pending requests section
+    if (pending.length) {
+      el.innerHTML += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--red);padding:8px 14px 4px;letter-spacing:.06em;">
+        Pending — ${pending.length}
+      </div>`;
+      pending.forEach(f => {
+        const o = f.other;
+        el.innerHTML += `<div class="pending-item">
+          <div style="width:34px;height:34px;border-radius:50%;background:${o.avatar_color};display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;flex-shrink:0;">${o.display_name[0].toUpperCase()}</div>
+          <div style="flex:1;min-width:0;">
+            <div class="pending-name">${esc(o.display_name)}</div>
+            <div style="font-size:11px;color:var(--text3);">wants to be friends</div>
+          </div>
+          <div style="display:flex;gap:4px;">
+            <button class="btn btn-green btn-xs" onclick="acceptFriendSidebar(${f.id})">✓</button>
+            <button class="btn btn-ghost btn-xs" onclick="declineFriendSidebar(${f.id})">✕</button>
+          </div>
+        </div>`;
+      });
+    }
+
+    // Online/offline friends
+    if (accepted.length) {
+      const online  = accepted.filter(f => f.other.status === 'online');
+      const offline = accepted.filter(f => f.other.status !== 'online');
+
+      if (online.length) {
+        el.innerHTML += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);padding:10px 14px 4px;letter-spacing:.06em;">Online — ${online.length}</div>`;
+        online.forEach(f => el.innerHTML += friendSidebarRow(f));
+      }
+      if (offline.length) {
+        el.innerHTML += `<div style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--text3);padding:10px 14px 4px;letter-spacing:.06em;">Offline — ${offline.length}</div>`;
+        offline.forEach(f => el.innerHTML += friendSidebarRow(f));
+      }
+    }
+
+    if (!pending.length && !accepted.length) {
+      el.innerHTML = `<div style="text-align:center;padding:32px 14px;color:var(--text3);font-size:13px;">
+        No friends yet.<br><br>
+        <button class="btn btn-primary btn-sm" onclick="showAddFriendModal()">➕ Add Your First Friend</button>
+      </div>`;
+    }
+  } catch(e) { console.error('loadFriendsSidebar:', e); }
+}
+
+function friendSidebarRow(f) {
+  const o = f.other;
+  const onlineDot = `<div style="position:absolute;bottom:0;right:0;width:10px;height:10px;border-radius:50%;border:2px solid var(--bg2);background:${o.status==='online'?'var(--green)':'var(--text3)'}"></div>`;
+  return `<div class="fr-dm-item">
+    <div style="position:relative;flex-shrink:0;">
+      <div style="width:34px;height:34px;border-radius:50%;background:${o.avatar_color};display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;">${o.display_name[0].toUpperCase()}</div>
+      ${onlineDot}
+    </div>
+    <div style="flex:1;min-width:0;">
+      <div class="fr-dm-name">${esc(o.display_name)}</div>
+      <div class="fr-dm-status">${o.status === 'online' ? '🟢 Online' : '⚫ Offline'}</div>
+    </div>
+    <div class="fr-dm-acts">
+      <button class="btn btn-ghost btn-xs" title="Message" onclick="dmUser('${esc(o.username)}')">💬</button>
+      <button class="btn btn-ghost btn-xs" title="Call" onclick="callUser(${o.id})">📞</button>
+    </div>
+  </div>`;
+}
+
+async function acceptFriendSidebar(id) {
+  try { await apiFetch('POST', '/friends/' + id + '/accept'); toast('Friend accepted!', 'ok'); loadFriendsSidebar(); }
+  catch(e) { toast(e.message, 'err'); }
+}
+async function declineFriendSidebar(id) {
+  try { await apiFetch('POST', '/friends/' + id + '/decline'); loadFriendsSidebar(); }
+  catch(e) { toast(e.message, 'err'); }
+}
+
+// ── Add Friend Modal ──────────────────────────────────────────────────────────
+function showAddFriendModal() {
+  showModal('Add a Friend', `
+    <div class="add-friend-modal">
+      <div class="big-icon">👋</div>
+      <h3>Find your friends</h3>
+      <p>Search by username to send them a friend request.</p>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
+      <input id="afm-un" class="inp" placeholder="Enter username…" oninput="afmSearch(this.value)"
+             onkeydown="if(event.key==='Enter')afmSend()" style="flex:1;">
+      <button class="btn btn-primary" onclick="afmSend()">Send Request</button>
+    </div>
+    <div class="err" id="afm-err"></div>
+    <div class="ok" id="afm-ok"></div>
+    <div id="afm-results" style="margin-top:10px;"></div>
+  `, [{ label: 'Close', cls: 'btn-ghost', fn: closeModal }]);
+}
+
+let _afmTO = null;
+function afmSearch(q) {
+  clearTimeout(_afmTO);
+  const el = document.getElementById('afm-results'); if (!el) return;
+  if (q.length < 2) { el.innerHTML = ''; return; }
+  _afmTO = setTimeout(async () => {
+    try {
+      const users = await apiFetch('GET', '/users/search?q=' + encodeURIComponent(q));
+      if (!users.length) { el.innerHTML = '<div style="color:var(--text3);font-size:13px;text-align:center;padding:12px;">No users found</div>'; return; }
+      el.innerHTML = users.map(u => {
+        const fr = S.friends.find(f => f.other.id === u.id);
+        let action = '';
+        if (u.id === S.user?.id) action = '<span style="color:var(--text3);font-size:12px;">That\'s you!</span>';
+        else if (!fr) action = `<button class="btn btn-primary btn-sm" onclick="afmSendTo('${esc(u.username)}',this)">➕ Add</button>`;
+        else if (fr.status === 'accepted') action = '<span style="color:var(--green);font-size:12px;font-weight:600;">✓ Friends</span>';
+        else if (fr.is_requester) action = '<span style="color:var(--text3);font-size:12px;">Request sent</span>';
+        else action = `<button class="btn btn-green btn-sm" onclick="afmAcceptFrom(${fr.id},this)">✓ Accept</button>`;
+        return `<div class="friend-search-result">
+          <div style="width:38px;height:38px;border-radius:50%;background:${u.avatar_color};display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:700;color:#fff;flex-shrink:0;">${u.display_name[0].toUpperCase()}</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-weight:600;font-size:14px;">${esc(u.display_name)}</div>
+            <div style="font-size:12px;color:var(--text2);font-family:monospace;">@${esc(u.username)}</div>
+          </div>
+          ${action}
+        </div>`;
+      }).join('');
+    } catch(e) { el.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
+  }, 300);
+}
+
+async function afmSend() {
+  const inp = document.getElementById('afm-un');
+  const un  = (inp?.value || '').trim();
+  const err = document.getElementById('afm-err');
+  const ok  = document.getElementById('afm-ok');
+  if (!un || !err || !ok) return;
+  err.textContent = ''; ok.textContent = '';
+  try {
+    await apiFetch('POST', '/friends/request', { username: un });
+    ok.textContent = '✓ Friend request sent to ' + un + '!';
+    if (inp) inp.value = '';
+    document.getElementById('afm-results').innerHTML = '';
+    loadFriendsSidebar();
+  } catch(e) { err.textContent = e.message; }
+}
+
+async function afmSendTo(username, btn) {
+  try {
+    await apiFetch('POST', '/friends/request', { username });
+    btn.textContent = 'Sent!'; btn.disabled = true; btn.className = 'btn btn-ghost btn-sm';
+    toast('Friend request sent to ' + username, 'ok');
+    loadFriendsSidebar();
+  } catch(e) { toast(e.message, 'err'); }
+}
+
+async function afmAcceptFrom(id, btn) {
+  try {
+    await apiFetch('POST', '/friends/' + id + '/accept');
+    btn.textContent = 'Accepted!'; btn.disabled = true; btn.className = 'btn btn-ghost btn-sm';
+    toast('Friend accepted!', 'ok');
+    loadFriendsSidebar();
+  } catch(e) { toast(e.message, 'err'); }
+}
+
 const DEFAULT_SERVER = 'https://thl2lsbc-3000.use.devtunnels.ms';
 
 (function init() {
