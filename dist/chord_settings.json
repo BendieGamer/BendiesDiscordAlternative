@@ -1,0 +1,17 @@
+{
+  "current_server": "https://thl2lsbc-3000.use.devtunnels.ms",
+  "current_server_name": "Chord",
+  "saved_servers": [
+    {
+      "url": "https://thl2lsbc-3000.use.devtunnels.ms",
+      "name": "Chord",
+      "ts": 1773955751912
+    },
+    {
+      "url": "http://localhost:3000",
+      "name": "Chord",
+      "ts": 1773955605349
+    }
+  ],
+  "auth_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI0IiwidXNlcm5hbWUiOiJiZW5kaWVnYWtlcyIsImlhdCI6MTc3Mzk1NTc3MiwiZXhwIjoxNzc0NTYwNTcyfQ.6skKwK_LrJ6sPqZbFcEUiPmgRwt-o2LkNAV0RU3holE"
+}
