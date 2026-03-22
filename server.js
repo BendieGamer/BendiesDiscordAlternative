@@ -32,6 +32,7 @@ db.exec(`
     display_name  TEXT    NOT NULL,
     password_hash TEXT    NOT NULL,
     avatar_color  TEXT    NOT NULL DEFAULT '#5865F2',
+    avatar_url    TEXT    NOT NULL DEFAULT '',
     status        TEXT    NOT NULL DEFAULT 'online',
     bio           TEXT    NOT NULL DEFAULT '',
     created_at    REAL    NOT NULL
@@ -66,22 +67,37 @@ db.exec(`
     created_at REAL    NOT NULL
   );
 
-  CREATE TABLE IF NOT EXISTS messages (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    channel_id INTEGER REFERENCES channels(id) ON DELETE CASCADE,
-    dm_id      INTEGER REFERENCES direct_messages(id) ON DELETE CASCADE,
-    author_id  INTEGER NOT NULL REFERENCES users(id),
-    content    TEXT    NOT NULL,
-    edited     INTEGER NOT NULL DEFAULT 0,
-    created_at REAL    NOT NULL
-  );
-
   CREATE TABLE IF NOT EXISTS direct_messages (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user1_id   INTEGER NOT NULL REFERENCES users(id),
     user2_id   INTEGER NOT NULL REFERENCES users(id),
     created_at REAL    NOT NULL,
     UNIQUE(user1_id, user2_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS group_dms (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT    NOT NULL DEFAULT '',
+    owner_id   INTEGER NOT NULL REFERENCES users(id),
+    created_at REAL    NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS group_dm_members (
+    group_id  INTEGER NOT NULL REFERENCES group_dms(id) ON DELETE CASCADE,
+    user_id   INTEGER NOT NULL REFERENCES users(id)     ON DELETE CASCADE,
+    joined_at REAL    NOT NULL,
+    PRIMARY KEY (group_id, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id INTEGER REFERENCES channels(id)        ON DELETE CASCADE,
+    dm_id      INTEGER REFERENCES direct_messages(id) ON DELETE CASCADE,
+    group_id   INTEGER REFERENCES group_dms(id)       ON DELETE CASCADE,
+    author_id  INTEGER NOT NULL REFERENCES users(id),
+    content    TEXT    NOT NULL,
+    edited     INTEGER NOT NULL DEFAULT 0,
+    created_at REAL    NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS friendships (
@@ -126,7 +142,7 @@ db.exec(`
     }
   }
 
-  addCol('users',          'bio',         "TEXT NOT NULL DEFAULT ''");
+  addCol('users', 'avatar_url', "TEXT NOT NULL DEFAULT ''");
   addCol('servers',        'icon_emoji',  "TEXT NOT NULL DEFAULT ''");
   addCol('servers',        'description', "TEXT NOT NULL DEFAULT ''");
   addCol('server_members', 'role',        "TEXT NOT NULL DEFAULT 'member'");
@@ -143,6 +159,16 @@ db.exec(`
     } catch(e) { console.warn('[migrate] invite_code:', e.message); }
   }
 
+  // group DMs (new in v4)
+  db.exec(`CREATE TABLE IF NOT EXISTS group_dms (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL DEFAULT '',
+    owner_id INTEGER NOT NULL, created_at REAL NOT NULL
+  )`);
+  db.exec(`CREATE TABLE IF NOT EXISTS group_dm_members (
+    group_id INTEGER NOT NULL, user_id INTEGER NOT NULL, joined_at REAL NOT NULL,
+    PRIMARY KEY (group_id, user_id)
+  )`);
+
   // notifications table may not exist in old databases
   db.exec(`CREATE TABLE IF NOT EXISTS notifications (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -155,6 +181,7 @@ db.exec(`
 
   // edited column on messages
   addCol('messages', 'edited', "INTEGER NOT NULL DEFAULT 0");
+  addCol('messages', 'group_id', "INTEGER REFERENCES group_dms(id) ON DELETE CASCADE");
 })();
 
 // ─── Seed ─────────────────────────────────────────────────────────────────────
@@ -203,7 +230,7 @@ db.exec(`
 })();
 
 // ─── Auth helpers ──────────────────────────────────────────────────────────────
-const mkToken = (id, un) => jwt.sign({ sub: String(id), username: un }, SECRET_KEY, { expiresIn: '7d' });
+const mkToken = (id, un) => jwt.sign({ sub: String(id), username: un }, SECRET_KEY, { expiresIn: '30d' });
 const chkToken = t => { try { return jwt.verify(t, SECRET_KEY); } catch { return null; } };
 const safe = u => { if (!u) return null; const { password_hash, ...s } = u; return s; };
 
@@ -237,7 +264,7 @@ function broadcastCh(chId, msg, exclude=null) {
 const app    = express();
 const server = http.createServer(app);
 app.use(cors({ origin:'*', methods:['GET','POST','PUT','PATCH','DELETE','OPTIONS'], allowedHeaders:'*' }));
-app.use(express.json());
+app.use(express.json({ limit: '4mb' }));
 
 app.get('/health', (_, res) => res.json({ ok:true, server:'Chord', version:'3.0', time:Date.now() }));
 
@@ -263,18 +290,33 @@ app.post('/api/login', (req, res) => {
   if (!user||!bcrypt.compareSync(password, user.password_hash))
     return res.status(401).json({ error:'Invalid credentials' });
   db.prepare('UPDATE users SET status=? WHERE id=?').run('online', user.id);
-  res.json({ token: mkToken(user.id,user.username), user: safe(user) });
+  res.json({ token: mkToken(user.id,user.username), user: safe(db.prepare('SELECT * FROM users WHERE id=?').get(user.id)) });
 });
 
 app.get('/api/me', auth, (req, res) => {
   res.json(safe(db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id)));
 });
 
-app.patch('/api/me', auth, (req, res) => {
-  const { display_name, bio, status } = req.body||{};
+// Refresh token — call on startup to get a fresh 30-day token
+app.post('/api/auth/refresh', auth, (req, res) => {
   const user = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
-  db.prepare('UPDATE users SET display_name=?,bio=?,status=? WHERE id=?')
-    .run(display_name||user.display_name, bio??user.bio, status||user.status, req.user.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  res.json({ token: mkToken(user.id, user.username), user: safe(user) });
+});
+
+// Logout — mark user offline
+app.post('/api/logout', auth, (req, res) => {
+  db.prepare('UPDATE users SET status=? WHERE id=?').run('offline', req.user.id);
+  res.json({ ok: true });
+});
+
+app.patch('/api/me', auth, (req, res) => {
+  const { display_name, bio, status, avatar_url } = req.body||{};
+  const user = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
+  // Limit avatar data URL to 2MB
+  const av = avatar_url !== undefined ? (avatar_url.length < 2*1024*1024 ? avatar_url : user.avatar_url) : user.avatar_url;
+  db.prepare('UPDATE users SET display_name=?,bio=?,status=?,avatar_url=? WHERE id=?')
+    .run(display_name||user.display_name, bio??user.bio, status||user.status, av, req.user.id);
   res.json(safe(db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id)));
 });
 
@@ -479,11 +521,10 @@ app.delete('/api/servers/:id/channels/:cid', auth, (req, res) => {
   res.json({ ok:true });
 });
 
-// ─── Messages ──────────────────────────────────────────────────────────────────
 app.get('/api/channels/:id/messages', auth, (req, res) => {
   const before = req.query.before ? parseFloat(req.query.before) : Date.now()/1000+1;
   const msgs = db.prepare(`
-    SELECT m.*,u.display_name,u.username,u.avatar_color
+    SELECT m.*,u.display_name,u.username,u.avatar_color,u.avatar_url
     FROM messages m JOIN users u ON m.author_id=u.id
     WHERE m.channel_id=? AND m.created_at<? ORDER BY m.created_at DESC LIMIT 50
   `).all(req.params.id,before).reverse();
@@ -495,7 +536,7 @@ app.post('/api/channels/:id/messages', auth, (req, res) => {
   if (!content?.trim()) return res.status(400).json({ error:'Empty message' });
   const now = Date.now()/1000;
   db.prepare('INSERT INTO messages (channel_id,author_id,content,created_at) VALUES (?,?,?,?)').run(req.params.id,req.user.id,content.trim(),now);
-  const msg = db.prepare('SELECT m.*,u.display_name,u.username,u.avatar_color FROM messages m JOIN users u ON m.author_id=u.id WHERE m.channel_id=? ORDER BY m.id DESC LIMIT 1').get(req.params.id);
+  const msg = db.prepare('SELECT m.*,u.display_name,u.username,u.avatar_color,u.avatar_url FROM messages m JOIN users u ON m.author_id=u.id WHERE m.channel_id=? ORDER BY m.id DESC LIMIT 1').get(req.params.id);
   broadcastCh(parseInt(req.params.id), { type:'new_message', message:msg });
   res.json(msg);
 });
@@ -514,8 +555,8 @@ app.get('/api/dms', auth, (req, res) => {
   const uid = req.user.id;
   const dms = db.prepare(`
     SELECT dm.*,
-      u1.id as u1i, u1.username as u1u, u1.display_name as u1d, u1.avatar_color as u1c, u1.status as u1s,
-      u2.id as u2i, u2.username as u2u, u2.display_name as u2d, u2.avatar_color as u2c, u2.status as u2s,
+      u1.id as u1i, u1.username as u1u, u1.display_name as u1d, u1.avatar_color as u1c, u1.status as u1s, u1.avatar_url as u1av,
+      u2.id as u2i, u2.username as u2u, u2.display_name as u2d, u2.avatar_color as u2c, u2.status as u2s, u2.avatar_url as u2av,
       (SELECT content FROM messages WHERE dm_id=dm.id ORDER BY created_at DESC LIMIT 1) as last_msg,
       (SELECT created_at FROM messages WHERE dm_id=dm.id ORDER BY created_at DESC LIMIT 1) as last_msg_at
     FROM direct_messages dm
@@ -526,8 +567,8 @@ app.get('/api/dms', auth, (req, res) => {
   res.json(dms.map(dm => {
     const p=dm.user1_id===uid?'u2':'u1';
     return {
-      id:dm.id, created_at:dm.created_at, last_msg:dm.last_msg, last_msg_at:dm.last_msg_at,
-      other_user:{ id:dm[p+'i'],username:dm[p+'u'],display_name:dm[p+'d'],avatar_color:dm[p+'c'],status:dm[p+'s'] }
+      id:dm.id, type:'dm', created_at:dm.created_at, last_msg:dm.last_msg, last_msg_at:dm.last_msg_at,
+      other_user:{ id:dm[p+'i'],username:dm[p+'u'],display_name:dm[p+'d'],avatar_color:dm[p+'c'],status:dm[p+'s'],avatar_url:dm[p+'av']||'' }
     };
   }));
 });
@@ -542,7 +583,7 @@ app.post('/api/dms/open', auth, (req, res) => {
   const [u1,u2] = [Math.min(req.user.id,other.id),Math.max(req.user.id,other.id)];
   try { db.prepare('INSERT INTO direct_messages (user1_id,user2_id,created_at) VALUES (?,?,?)').run(u1,u2,Date.now()/1000); } catch {}
   const dm = db.prepare('SELECT * FROM direct_messages WHERE user1_id=? AND user2_id=?').get(u1,u2);
-  res.json({ dm_id: dm.id });
+  res.json({ dm_id: dm.id, type: 'dm' });
 });
 
 app.get('/api/dms/:id/messages', auth, (req, res) => {
@@ -550,7 +591,7 @@ app.get('/api/dms/:id/messages', auth, (req, res) => {
   if (!dm) return res.status(403).json({ error:'Not your DM' });
   const before = req.query.before ? parseFloat(req.query.before) : Date.now()/1000+1;
   const msgs = db.prepare(`
-    SELECT m.*,u.display_name,u.username,u.avatar_color
+    SELECT m.*,u.display_name,u.username,u.avatar_color,u.avatar_url
     FROM messages m JOIN users u ON m.author_id=u.id
     WHERE m.dm_id=? AND m.created_at<? ORDER BY m.created_at DESC LIMIT 50
   `).all(req.params.id,before).reverse();
@@ -564,9 +605,193 @@ app.post('/api/dms/:id/messages', auth, (req, res) => {
   if (!dm) return res.status(403).json({ error:'Not your DM' });
   const now = Date.now()/1000;
   db.prepare('INSERT INTO messages (dm_id,author_id,content,created_at) VALUES (?,?,?,?)').run(req.params.id,req.user.id,content.trim(),now);
-  const msg = db.prepare('SELECT m.*,u.display_name,u.username,u.avatar_color FROM messages m JOIN users u ON m.author_id=u.id WHERE m.dm_id=? ORDER BY m.id DESC LIMIT 1').get(req.params.id);
+  const msg = db.prepare('SELECT m.*,u.display_name,u.username,u.avatar_color,u.avatar_url FROM messages m JOIN users u ON m.author_id=u.id WHERE m.dm_id=? ORDER BY m.id DESC LIMIT 1').get(req.params.id);
   const otherId = dm.user1_id===req.user.id ? dm.user2_id : dm.user1_id;
   wsUser(otherId, { type:'new_dm', dm_id:dm.id, message:msg });
+  res.json(msg);
+});
+
+// ─── Group DMs ─────────────────────────────────────────────────────────────────
+const GRP_COLORS = ['#5865F2','#EB459E','#57F287','#ED4245','#3BA55C','#9B59B6','#E67E22'];
+
+app.get('/api/groups', auth, (req, res) => {
+  const groups = db.prepare(`
+    SELECT g.*, gdm.joined_at,
+      (SELECT content FROM group_dm_messages WHERE group_id=g.id ORDER BY created_at DESC LIMIT 1) as last_msg,
+      (SELECT created_at FROM group_dm_messages WHERE group_id=g.id ORDER BY created_at DESC LIMIT 1) as last_msg_at,
+      (SELECT COUNT(*) FROM group_dm_members WHERE group_id=g.id) as member_count
+    FROM group_dms g JOIN group_dm_members gdm ON g.id=gdm.group_id
+    WHERE gdm.user_id=? ORDER BY last_msg_at DESC NULLS LAST
+  `).all(req.user.id);
+  res.json(groups.map(g => ({
+    ...g, type: 'group',
+    members: db.prepare(`SELECT u.id,u.username,u.display_name,u.avatar_color,u.avatar_url,u.status FROM users u JOIN group_dm_members gm ON u.id=gm.user_id WHERE gm.group_id=?`).all(g.id)
+  })));
+});
+
+app.post('/api/groups', auth, (req, res) => {
+  const { name, member_ids=[] } = req.body||{};
+  if (!name) return res.status(400).json({ error:'Name required' });
+  const color = GRP_COLORS[Math.floor(Math.random()*GRP_COLORS.length)];
+  const now = Date.now()/1000;
+  db.prepare('INSERT INTO group_dms (name,owner_id,icon_color,created_at) VALUES (?,?,?,?)').run(name, req.user.id, color, now);
+  const gid = db.prepare('SELECT last_insert_rowid() as id').get().id;
+  // Add creator + specified members
+  const allIds = [...new Set([req.user.id, ...member_ids.map(Number)])];
+  for (const uid of allIds)
+    try { db.prepare('INSERT INTO group_dm_members (group_id,user_id,joined_at) VALUES (?,?,?)').run(gid,uid,now); } catch {}
+  // Notify members
+  const creator = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
+  for (const uid of allIds) if (uid!==req.user.id) wsUser(uid, { type:'group_invite', group_id:gid, group_name:name, from:safe(creator) });
+  const group = db.prepare('SELECT * FROM group_dms WHERE id=?').get(gid);
+  res.json({ ...group, type:'group', members: allIds });
+});
+
+app.get('/api/groups/:id/messages', auth, (req, res) => {
+  const member = db.prepare('SELECT 1 FROM group_dm_members WHERE group_id=? AND user_id=?').get(req.params.id,req.user.id);
+  if (!member) return res.status(403).json({ error:'Not a member' });
+  const msgs = db.prepare(`
+    SELECT m.*,u.display_name,u.username,u.avatar_color,u.avatar_url
+    FROM group_dm_messages m JOIN users u ON m.author_id=u.id
+    WHERE m.group_id=? ORDER BY m.created_at DESC LIMIT 50
+  `).all(req.params.id).reverse();
+  res.json(msgs);
+});
+
+app.post('/api/groups/:id/messages', auth, (req, res) => {
+  const member = db.prepare('SELECT 1 FROM group_dm_members WHERE group_id=? AND user_id=?').get(req.params.id,req.user.id);
+  if (!member) return res.status(403).json({ error:'Not a member' });
+  const { content } = req.body||{};
+  if (!content?.trim()) return res.status(400).json({ error:'Empty' });
+  const now = Date.now()/1000;
+  db.prepare('INSERT INTO group_dm_messages (group_id,author_id,content,created_at) VALUES (?,?,?,?)').run(req.params.id,req.user.id,content.trim(),now);
+  const msg = db.prepare(`SELECT m.*,u.display_name,u.username,u.avatar_color,u.avatar_url FROM group_dm_messages m JOIN users u ON m.author_id=u.id WHERE m.group_id=? ORDER BY m.id DESC LIMIT 1`).get(req.params.id);
+  // Broadcast to all members
+  const members = db.prepare('SELECT user_id FROM group_dm_members WHERE group_id=?').all(req.params.id);
+  for (const {user_id} of members) if (user_id!==req.user.id) wsUser(user_id, { type:'new_group_msg', group_id:parseInt(req.params.id), message:msg });
+  res.json(msg);
+});
+
+app.post('/api/groups/:id/members', auth, (req, res) => {
+  const isOwner = db.prepare('SELECT 1 FROM group_dms WHERE id=? AND owner_id=?').get(req.params.id,req.user.id);
+  const isMember = db.prepare('SELECT 1 FROM group_dm_members WHERE group_id=? AND user_id=?').get(req.params.id,req.user.id);
+  if (!isOwner && !isMember) return res.status(403).json({ error:'Not a member' });
+  const { user_id } = req.body||{};
+  try { db.prepare('INSERT INTO group_dm_members (group_id,user_id,joined_at) VALUES (?,?,?)').run(req.params.id,user_id,Date.now()/1000); }
+  catch { return res.status(400).json({ error:'Already a member' }); }
+  const adder = db.prepare('SELECT * FROM users WHERE id=?').get(req.user.id);
+  const grp = db.prepare('SELECT * FROM group_dms WHERE id=?').get(req.params.id);
+  wsUser(user_id, { type:'group_invite', group_id:parseInt(req.params.id), group_name:grp.name, from:safe(adder) });
+  res.json({ ok:true });
+});
+
+app.delete('/api/groups/:id/leave', auth, (req, res) => {
+  db.prepare('DELETE FROM group_dm_members WHERE group_id=? AND user_id=?').run(req.params.id,req.user.id);
+  res.json({ ok:true });
+});
+
+// ─── Group DMs ─────────────────────────────────────────────────────────────────
+
+// List all group DMs the user belongs to
+app.get('/api/groups', auth, (req, res) => {
+  const groups = db.prepare(`
+    SELECT g.*, 
+      (SELECT content FROM messages WHERE group_id=g.id ORDER BY created_at DESC LIMIT 1) as last_msg,
+      (SELECT created_at FROM messages WHERE group_id=g.id ORDER BY created_at DESC LIMIT 1) as last_msg_at
+    FROM group_dms g
+    JOIN group_dm_members m ON g.id=m.group_id
+    WHERE m.user_id=?
+    ORDER BY last_msg_at DESC NULLS LAST
+  `).all(req.user.id);
+  // Attach member list to each group
+  const result = groups.map(g => {
+    const members = db.prepare(`
+      SELECT u.id, u.username, u.display_name, u.avatar_color, u.status, u.avatar_url
+      FROM users u JOIN group_dm_members m ON u.id=m.user_id WHERE m.group_id=?
+    `).all(g.id);
+    return { ...g, members };
+  });
+  res.json(result);
+});
+
+// Create a group DM
+app.post('/api/groups', auth, (req, res) => {
+  const { name, user_ids } = req.body || {};
+  if (!name || !name.trim()) return res.status(400).json({ error: 'Group name required' });
+  if (!Array.isArray(user_ids) || user_ids.length < 1) return res.status(400).json({ error: 'Add at least 1 other person' });
+  const now = Date.now() / 1000;
+  db.prepare('INSERT INTO group_dms (name, owner_id, created_at) VALUES (?,?,?)').run(name.trim(), req.user.id, now);
+  const gid = db.prepare('SELECT last_insert_rowid() as id').get().id;
+  // Add owner + all specified users
+  const allIds = [...new Set([req.user.id, ...user_ids.map(Number)])];
+  for (const uid of allIds) {
+    try { db.prepare('INSERT INTO group_dm_members (group_id,user_id,joined_at) VALUES (?,?,?)').run(gid, uid, now); } catch {}
+  }
+  const group = db.prepare('SELECT * FROM group_dms WHERE id=?').get(gid);
+  const members = db.prepare(`SELECT u.id,u.username,u.display_name,u.avatar_color,u.status,u.avatar_url FROM users u JOIN group_dm_members m ON u.id=m.user_id WHERE m.group_id=?`).all(gid);
+  // Notify other members
+  for (const uid of allIds) {
+    if (uid !== req.user.id) wsUser(uid, { type: 'new_group', group: { ...group, members } });
+  }
+  res.json({ ...group, members });
+});
+
+// Get group DM info + members
+app.get('/api/groups/:id', auth, (req, res) => {
+  const member = db.prepare('SELECT 1 FROM group_dm_members WHERE group_id=? AND user_id=?').get(req.params.id, req.user.id);
+  if (!member) return res.status(403).json({ error: 'Not a member' });
+  const group = db.prepare('SELECT * FROM group_dms WHERE id=?').get(req.params.id);
+  const members = db.prepare(`SELECT u.id,u.username,u.display_name,u.avatar_color,u.status,u.avatar_url FROM users u JOIN group_dm_members m ON u.id=m.user_id WHERE m.group_id=?`).all(req.params.id);
+  res.json({ ...group, members });
+});
+
+// Add a member to a group
+app.post('/api/groups/:id/members', auth, (req, res) => {
+  const member = db.prepare('SELECT 1 FROM group_dm_members WHERE group_id=? AND user_id=?').get(req.params.id, req.user.id);
+  if (!member) return res.status(403).json({ error: 'Not a member' });
+  const { user_id } = req.body || {};
+  if (!user_id) return res.status(400).json({ error: 'user_id required' });
+  try { db.prepare('INSERT INTO group_dm_members (group_id,user_id,joined_at) VALUES (?,?,?)').run(req.params.id, user_id, Date.now()/1000); }
+  catch { return res.json({ ok: true }); } // already member
+  const group = db.prepare('SELECT * FROM group_dms WHERE id=?').get(req.params.id);
+  const members = db.prepare(`SELECT u.id,u.username,u.display_name,u.avatar_color,u.status,u.avatar_url FROM users u JOIN group_dm_members m ON u.id=m.user_id WHERE m.group_id=?`).all(req.params.id);
+  wsUser(Number(user_id), { type: 'new_group', group: { ...group, members } });
+  res.json({ ok: true });
+});
+
+// Leave a group
+app.delete('/api/groups/:id/leave', auth, (req, res) => {
+  db.prepare('DELETE FROM group_dm_members WHERE group_id=? AND user_id=?').run(req.params.id, req.user.id);
+  res.json({ ok: true });
+});
+
+// Get group messages
+app.get('/api/groups/:id/messages', auth, (req, res) => {
+  const member = db.prepare('SELECT 1 FROM group_dm_members WHERE group_id=? AND user_id=?').get(req.params.id, req.user.id);
+  if (!member) return res.status(403).json({ error: 'Not a member' });
+  const before = req.query.before ? parseFloat(req.query.before) : Date.now()/1000+1;
+  const msgs = db.prepare(`
+    SELECT m.*,u.display_name,u.username,u.avatar_color,u.avatar_url
+    FROM messages m JOIN users u ON m.author_id=u.id
+    WHERE m.group_id=? AND m.created_at<? ORDER BY m.created_at DESC LIMIT 50
+  `).all(req.params.id, before).reverse();
+  res.json(msgs);
+});
+
+// Send group message
+app.post('/api/groups/:id/messages', auth, (req, res) => {
+  const { content } = req.body || {};
+  if (!content?.trim()) return res.status(400).json({ error: 'Empty' });
+  const member = db.prepare('SELECT 1 FROM group_dm_members WHERE group_id=? AND user_id=?').get(req.params.id, req.user.id);
+  if (!member) return res.status(403).json({ error: 'Not a member' });
+  const now = Date.now()/1000;
+  db.prepare('INSERT INTO messages (group_id,author_id,content,created_at) VALUES (?,?,?,?)').run(req.params.id, req.user.id, content.trim(), now);
+  const msg = db.prepare(`SELECT m.*,u.display_name,u.username,u.avatar_color,u.avatar_url FROM messages m JOIN users u ON m.author_id=u.id WHERE m.group_id=? ORDER BY m.id DESC LIMIT 1`).get(req.params.id);
+  // Send to all members except sender
+  const members = db.prepare('SELECT user_id FROM group_dm_members WHERE group_id=?').all(req.params.id);
+  for (const m of members) {
+    if (m.user_id !== req.user.id) wsUser(m.user_id, { type: 'new_group_msg', group_id: parseInt(req.params.id), message: msg });
+  }
   res.json(msg);
 });
 
@@ -626,8 +851,26 @@ wss.on('connection', (ws, req) => {
   }
   else if (wsType==='user') {
     if (userId!==wsId){ws.close(4001,'Forbidden');return;}
-    userSockets.set(userId,ws);
-    ws.on('message',()=>{}); ws.on('close',()=>{if(userSockets.get(userId)===ws)userSockets.delete(userId);});
+
+    // Mark online and notify friends
+    db.prepare('UPDATE users SET status=? WHERE id=?').run('online', userId);
+    userSockets.set(userId, ws);
+    // Broadcast online status to all friends who are connected
+    const friendIds = db.prepare(`
+      SELECT CASE WHEN requester_id=? THEN addressee_id ELSE requester_id END as fid
+      FROM friendships WHERE (requester_id=? OR addressee_id=?) AND status='accepted'
+    `).all(userId, userId, userId).map(r => r.fid);
+    for (const fid of friendIds) wsUser(fid, { type:'presence', userId, status:'online' });
+
+    ws.on('message', () => {});
+    ws.on('close', () => {
+      if (userSockets.get(userId) === ws) {
+        userSockets.delete(userId);
+        // Mark offline and notify friends
+        db.prepare('UPDATE users SET status=? WHERE id=?').run('offline', userId);
+        for (const fid of friendIds) wsUser(fid, { type:'presence', userId, status:'offline' });
+      }
+    });
   }
   else if (wsType==='voice') {
     const row=db.prepare('SELECT * FROM users WHERE id=?').get(userId);
@@ -636,7 +879,10 @@ wss.on('connection', (ws, req) => {
     const room=voiceRooms.get(wsId);
     for(const[uid,peer]of room.entries()){if(peer.ws.readyState===WebSocket.OPEN){peer.ws.send(JSON.stringify({type:'voice_user_joined',userId,userInfo:info}));ws.send(JSON.stringify({type:'voice_peer_exists',userId:uid,userInfo:peer.info}));}}
     room.set(userId,{ws,info});
-    ws.on('message',raw=>{try{const msg=JSON.parse(raw);if(msg.type==='voice_signal'){const peer=room.get(msg.toUserId);if(peer?.ws.readyState===WebSocket.OPEN)peer.ws.send(JSON.stringify({type:'voice_signal',fromUserId:userId,signal:msg.signal}));}}catch{}});
+    ws.on('message',raw=>{try{const msg=JSON.parse(raw);if(msg.type==='voice_signal'){const peer=room.get(msg.toUserId);if(peer?.ws.readyState===WebSocket.OPEN)peer.ws.send(JSON.stringify({type:'voice_signal',fromUserId:userId,signal:msg.signal}));}else if(msg.type==='screen_share_started'||msg.type==='screen_share_stopped'){// Broadcast to everyone else in the room
+for(const[uid,peer]of room.entries()){if(uid!==userId&&peer.ws.readyState===WebSocket.OPEN)peer.ws.send(JSON.stringify({type:msg.type,userId}));}}else if(msg.type==='voice_mute_update'){// Broadcast mute state change
+for(const[uid,peer]of room.entries()){if(uid!==userId&&peer.ws.readyState===WebSocket.OPEN)peer.ws.send(JSON.stringify({type:'voice_mute_update',userId,muted:msg.muted}));}}
+}catch{}});
     ws.on('close',()=>{room.delete(userId);for(const[,peer]of room.entries())if(peer.ws.readyState===WebSocket.OPEN)peer.ws.send(JSON.stringify({type:'voice_user_left',userId}));if(room.size===0)voiceRooms.delete(wsId);});
   }
   else if (wsType==='call') {

@@ -31,10 +31,29 @@ def resource_path(rel):
     base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, rel)
 
+# Fixed frontend port — must stay the same across restarts so localStorage persists.
+# localStorage is scoped to origin (scheme + host + port), so a random port
+# means a new origin every launch and localStorage is always empty.
+FRONTEND_PORT = 9847
+
 def find_free_port():
+    """Fallback: find any free port (only used if FRONTEND_PORT is taken)."""
     with socket.socket() as s:
         s.bind(('127.0.0.1', 0))
         return s.getsockname()[1]
+
+def get_frontend_port():
+    """Use the fixed port if available, otherwise fall back to a random one and warn."""
+    try:
+        with socket.socket() as s:
+            s.bind(('127.0.0.1', FRONTEND_PORT))
+        return FRONTEND_PORT
+    except OSError:
+        # Port already in use — another instance may be running, or pick random
+        fallback = find_free_port()
+        print(f'[chord] Warning: port {FRONTEND_PORT} in use, using {fallback} instead.')
+        print(f'[chord] Note: localStorage will not persist this session.')
+        return fallback
 
 # ── settings (simple JSON file next to the exe) ───────────────────────────────
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), 'chord_settings.json')
@@ -297,22 +316,68 @@ input, textarea { font-family: inherit; outline: none; border: none; color: var(
 .mem-name { font-size: 13px; color: var(--text2); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mem-role { font-size: 10px; color: var(--accent); font-weight: 600; }
 
-/* VC panel */
-#vc-view { flex: 1; display: flex; align-items: center; justify-content: center; }
-.vc-card { background: var(--bg2); border: 1px solid var(--border); border-radius: 16px; padding: 32px 48px; text-align: center; min-width: 320px; }
-.vc-card h2 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
-.vc-sub { color: var(--text2); font-size: 13px; margin-bottom: 20px; }
-.vc-parts { display: flex; flex-wrap: wrap; gap: 16px; justify-content: center; margin-bottom: 20px; min-height: 80px; }
-.vc-part { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.vc-pav { width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 700; color: #fff; position: relative; transition: .25s; }
-.vc-pav.muted::after { content: '🔇'; position: absolute; bottom: -2px; right: -2px; font-size: 13px; }
-.vc-pname { font-size: 12px; color: var(--text2); font-weight: 600; }
-.vc-ctrls { display: flex; gap: 10px; justify-content: center; }
-.vc-btn { width: 46px; height: 46px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: pointer; border: none; transition: .2s; font-family: inherit; }
-.vc-btn.normal { background: var(--bg4); color: var(--text); }
-.vc-btn.normal:hover { background: var(--hover); }
-.vc-btn.active { background: var(--red); color: #fff; }
-#vc-status { margin-top: 12px; font-size: 12px; color: var(--text2); }
+/* VC panel — full screen share layout */
+#vc-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: #0a0b0d; }
+
+/* Screen share area (shown when someone is sharing) */
+#vc-screenshare-area {
+  flex: 1; display: none; align-items: center; justify-content: center;
+  background: #000; position: relative; overflow: hidden; min-height: 0;
+}
+#vc-screenshare-area.active { display: flex; }
+#vc-screenshare-video {
+  max-width: 100%; max-height: 100%; object-fit: contain;
+  border-radius: 4px;
+}
+#vc-screenshare-label {
+  position: absolute; top: 12px; left: 12px;
+  background: rgba(0,0,0,.6); color: #fff; font-size: 12px; font-weight: 600;
+  padding: 4px 10px; border-radius: 20px; backdrop-filter: blur(4px);
+}
+#vc-screenshare-placeholder {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  flex-direction: column; gap: 12px; color: var(--text3);
+}
+#vc-screenshare-placeholder.hidden { display: none; }
+
+/* Participants strip at bottom */
+#vc-participants-strip {
+  height: 120px; background: var(--sidebar); display: flex; align-items: center;
+  gap: 12px; padding: 0 16px; flex-shrink: 0; border-top: 1px solid var(--border);
+  overflow-x: auto;
+}
+#vc-participants-strip::-webkit-scrollbar { height: 4px; }
+
+.vc-strip-part {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  flex-shrink: 0; cursor: pointer; transition: .15s;
+}
+.vc-strip-part:hover { opacity: .85; }
+.vc-strip-av {
+  width: 56px; height: 56px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; font-weight: 700; color: #fff;
+  border: 2px solid transparent; transition: .2s; position: relative;
+}
+.vc-strip-av.speaking { border-color: var(--green); box-shadow: 0 0 0 2px rgba(59,165,92,.3); }
+.vc-strip-av.sharing  { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(88,101,242,.3); }
+.vc-strip-av.muted::after { content: '🔇'; position: absolute; bottom: -2px; right: -2px; font-size: 11px; }
+.vc-strip-name { font-size: 11px; color: var(--text2); font-weight: 600; max-width: 64px; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
+
+/* Controls bar */
+#vc-controls-bar {
+  height: 56px; background: var(--bg2); display: flex; align-items: center;
+  justify-content: center; gap: 10px; flex-shrink: 0; border-top: 1px solid var(--border);
+}
+.vc-ctrl { width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 17px; cursor: pointer; border: none; transition: .2s; font-family: inherit; position: relative; }
+.vc-ctrl.off  { background: var(--bg4); color: var(--text); }
+.vc-ctrl.off:hover { background: var(--bg3); }
+.vc-ctrl.on   { background: var(--red); color: #fff; }
+.vc-ctrl.on:hover  { filter: brightness(1.15); }
+.vc-ctrl.share-on  { background: var(--accent); color: #fff; }
+.vc-ctrl-label { position: absolute; bottom: -18px; font-size: 10px; color: var(--text3); white-space: nowrap; left: 50%; transform: translateX(-50%); }
+#vc-status { font-size: 12px; color: var(--text2); margin-left: 16px; }
+
 
 /* Friends panel */
 #friends-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
@@ -553,7 +618,10 @@ input, textarea { font-family: inherit; outline: none; border: none; color: var(
         <input id="dm-search" class="inp" placeholder="🔍 Search conversations" oninput="filterDMs(this.value)">
       </div>
       <div id="dm-list" style="flex:1;overflow-y:auto;"></div>
-      <button class="btn btn-ghost btn-sm" onclick="showNewDM()" style="margin:8px;justify-content:center;">✏️ New Message</button>
+      <div style="display:flex;gap:6px;margin:8px;">
+        <button class="btn btn-ghost btn-sm" style="flex:1;justify-content:center;" onclick="showNewDM()">✏️ New DM</button>
+        <button class="btn btn-ghost btn-sm" style="flex:1;justify-content:center;" onclick="showNewGroup()">👥 New Group</button>
+      </div>
     </div>
     <!-- Friends pane -->
     <div id="dm-friends-pane" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
@@ -581,7 +649,7 @@ input, textarea { font-family: inherit; outline: none; border: none; color: var(
     </div>
 
     <!-- Chat view -->
-    <div id="chat-view" class="hidden" style="display:flex;flex-direction:column;flex:1;overflow:hidden;">
+    <div id="chat-view" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
       <div class="ch-header">
         <span class="ch-header-icon" id="chat-icon">#</span>
         <span id="chat-name" style="font-size:15px;font-weight:700;"></span>
@@ -601,23 +669,51 @@ input, textarea { font-family: inherit; outline: none; border: none; color: var(
       </div>
     </div>
 
-    <!-- Voice view -->
-    <div id="vc-view" class="hidden" style="display:flex;">
-      <div class="vc-card">
-        <h2 id="vc-ch-name">Voice Channel</h2>
-        <div class="vc-sub">Real-time audio · WebRTC</div>
-        <div class="vc-parts" id="vc-parts"></div>
-        <div class="vc-ctrls">
-          <button class="vc-btn normal" id="vc-mute" onclick="toggleMute()">🎤</button>
-          <button class="vc-btn normal" id="vc-deaf" onclick="toggleDeafen()">🔊</button>
-          <button class="vc-btn active" onclick="leaveVC()">📞</button>
+    <!-- Voice / Screen Share view -->
+    <div id="vc-view" style="display:none;flex-direction:column;overflow:hidden;flex:1;">
+
+      <!-- Big screen share area -->
+      <div id="vc-screenshare-area">
+        <video id="vc-screenshare-video" autoplay playsinline></video>
+        <div id="vc-screenshare-label">🖥️ <span id="vc-sharer-name">Someone</span> is sharing</div>
+      </div>
+
+      <!-- No-share placeholder (shown when nobody is sharing) -->
+      <div id="vc-screenshare-placeholder">
+        <div style="font-size:48px;">🎙️</div>
+        <div style="font-size:16px;font-weight:600;color:var(--text);" id="vc-ch-name">Voice Channel</div>
+        <div style="font-size:13px;">Real-time audio · WebRTC peer-to-peer</div>
+        <div style="margin-top:8px;font-size:12px;color:var(--accent);cursor:pointer;" onclick="startScreenShare()">🖥️ Click to share your screen</div>
+      </div>
+
+      <!-- Participants strip -->
+      <div id="vc-participants-strip"></div>
+
+      <!-- Controls bar -->
+      <div id="vc-controls-bar">
+        <div style="position:relative;">
+          <button class="vc-ctrl off" id="vc-mute" onclick="toggleMute()" title="Mute/Unmute">🎤</button>
+          <span class="vc-ctrl-label">Mute</span>
+        </div>
+        <div style="position:relative;">
+          <button class="vc-ctrl off" id="vc-deaf" onclick="toggleDeafen()" title="Deafen">🔊</button>
+          <span class="vc-ctrl-label">Deafen</span>
+        </div>
+        <div style="position:relative;">
+          <button class="vc-ctrl off" id="vc-share" onclick="toggleScreenShare()" title="Share Screen">🖥️</button>
+          <span class="vc-ctrl-label">Share</span>
+        </div>
+        <div style="position:relative;">
+          <button class="vc-ctrl on" onclick="leaveVC()" title="Leave Voice">📞</button>
+          <span class="vc-ctrl-label">Leave</span>
         </div>
         <div id="vc-status"></div>
       </div>
+
     </div>
 
     <!-- Friends view -->
-    <div id="friends-view" class="hidden" style="display:flex;">
+    <div id="friends-view" style="display:none;flex-direction:column;flex:1;overflow:hidden;">
       <div class="fp-tabs">
         <button class="fp-tab active" id="fp-tab-all"     onclick="fpTab('all',this)">Friends</button>
         <button class="fp-tab"        id="fp-tab-pending" onclick="fpTab('pending',this)">Pending</button>
@@ -675,8 +771,23 @@ input, textarea { font-family: inherit; outline: none; border: none; color: var(
   <span>📞</span>
   <span class="cb-name" id="cb-name">In call</span>
   <span class="cb-dur" id="cb-dur">00:00</span>
-  <button class="btn btn-red btn-sm" onclick="hangup()">Hang Up</button>
+  <button class="btn btn-ghost btn-sm" id="cb-share-btn" onclick="toggleCallScreenShare()" title="Share screen">🖥️ Share</button>
   <button class="btn btn-ghost btn-sm" id="cb-mute-btn" onclick="toggleCallMute()">🎤 Mute</button>
+  <button class="btn btn-red btn-sm" onclick="hangup()">Hang Up</button>
+</div>
+
+<!-- Call screen share overlay (shown when other person is sharing) -->
+<div id="call-screen-overlay" style="display:none;position:fixed;inset:0;background:#000;z-index:450;flex-direction:column;">
+  <div style="height:44px;background:var(--bg2);display:flex;align-items:center;padding:0 16px;gap:12px;border-bottom:1px solid var(--border);">
+    <span style="font-size:14px;font-weight:600;" id="css-label">🖥️ Screen share</span>
+    <div style="flex:1;"></div>
+    <span style="font-size:12px;color:var(--text2);" id="cb-dur2"></span>
+    <button class="btn btn-ghost btn-sm" id="css-share-btn" onclick="toggleCallScreenShare()">🖥️ Share mine</button>
+    <button class="btn btn-ghost btn-sm" id="css-mute-btn" onclick="toggleCallMute()">🎤 Mute</button>
+    <button class="btn btn-red btn-sm" onclick="hangup()">📞 Hang Up</button>
+    <button class="btn btn-ghost btn-sm" onclick="closeCallScreenOverlay()">✕ Minimise</button>
+  </div>
+  <video id="call-screen-video" autoplay playsinline style="flex:1;width:100%;object-fit:contain;background:#000;"></video>
 </div>
 
 <!-- Profile popover -->
@@ -732,11 +843,13 @@ let API = '', WS = '';
 const S = {
   token: null, user: null,
   servers: [], curSrv: null, channels: [], curCh: null,
-  curDmId: null, curDmUser: null,
-  members: [], allDms: [], friends: [],
+  curDmId: null, curDmUser: null, curGroupId: null,
+  members: [], allDms: [], allGroups: [], friends: [],
   chWs: null, userWs: null,
   vcCh: null, localStream: null, vcPeers: {}, muted: false, deafened: false, vcParts: {},
+  screenStream: null, sharing: false, incomingScreenStreams: {}, currentSharer: null,
   callId: null, callRole: null, callPeers: {}, callStream: null,
+  callScreenStream: null, callSharing: false,
   callMuted: false, callActive: false, callTimer: null, callStart: null, ringTO: null,
   pendingCount: 0, dmUnread: 0,
   view: 'welcome',
@@ -783,10 +896,33 @@ function esc(s) {
     .replace(/"/g,'&quot;');
 }
 
-function avatarEl(letter, color, size = 38, fontSize = 14) {
-  return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};`+
-    `display:flex;align-items:center;justify-content:center;font-size:${fontSize}px;`+
+// Render an avatar — uses avatar_url (image) if set, otherwise color+letter fallback
+function avatarEl(letter, color, size = 38, fontSize = 14, avatarUrl = '') {
+  if (avatarUrl) {
+    return `<div style="width:${size}px;height:${size}px;border-radius:50%;overflow:hidden;flex-shrink:0;">` +
+      `<img src="${esc(avatarUrl)}" style="width:100%;height:100%;object-fit:cover;" onerror="this.parentNode.innerHTML='<div style=\'width:${size}px;height:${size}px;border-radius:50%;background:${color};display:flex;align-items:center;justify-content:center;font-size:${fontSize}px;font-weight:700;color:#fff;\'>${esc(letter)}</div>'"/>` +
+      `</div>`;
+  }
+  return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${color};` +
+    `display:flex;align-items:center;justify-content:center;font-size:${fontSize}px;` +
     `font-weight:700;color:#fff;flex-shrink:0;">${esc(letter)}</div>`;
+}
+
+// Set an avatar DOM element (with image support)
+function setAvatarEl(el, letter, color, avatarUrl) {
+  if (!el) return;
+  if (avatarUrl) {
+    el.style.background = 'transparent';
+    el.textContent = '';
+    el.style.overflow = 'hidden';
+    el.style.padding = '0';
+    el.innerHTML = `<img src="${esc(avatarUrl)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" onerror="this.parentNode.style.background='${color}';this.parentNode.textContent='${esc(letter)}';"/>`;
+  } else {
+    el.style.background = color;
+    el.style.overflow = '';
+    el.innerHTML = '';
+    el.textContent = letter;
+  }
 }
 
 function fmtTime(ts) {
@@ -1013,8 +1149,10 @@ async function doAuth() {
 }
 
 function logout() {
+  // Tell server we're going offline
+  if (S.token) apiFetch('POST', '/logout').catch(() => {});
   LS.del('chord_token'); S.token = null; S.user = null;
-  if (S.userWs) S.userWs.close();
+  if (S.userWs) { S.userWs.close(); S.userWs = null; }
   endCall();
   document.getElementById('app').classList.add('hidden');
   showSwitcher();
@@ -1032,16 +1170,9 @@ async function bootApp() {
   // Set user panels
   const u = S.user;
   const L = (u.display_name || u.username)[0].toUpperCase();
-  ['pan-av','pan-av2'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) { el.style.background = u.avatar_color; el.textContent = L; }
-  });
-  ['pan-name','pan-name2'].forEach(id => {
-    const el = document.getElementById(id); if (el) el.textContent = u.display_name;
-  });
-  ['pan-tag','pan-tag2'].forEach(id => {
-    const el = document.getElementById(id); if (el) el.textContent = '@' + u.username;
-  });
+  ['pan-av','pan-av2'].forEach(id => setAvatarEl(document.getElementById(id), L, u.avatar_color, u.avatar_url || ''));
+  ['pan-name','pan-name2'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = u.display_name; });
+  ['pan-tag','pan-tag2'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = '@' + u.username; });
   await loadServers();
   connectUserWs();
   askNotifPerm();
@@ -1062,14 +1193,17 @@ function connectUserWs() {
 function handlePush(msg) {
   switch (msg.type) {
     case 'new_dm':
-      loadDMs();
+      loadAllDMs();
       if (S.curDmId === msg.dm_id) appendMsg(msg.message);
-      else {
-        S.dmUnread++;
-        updateDmBadge();
-        toast('💬 ' + msg.message.display_name + ': ' + msg.message.content.slice(0, 50), 'info');
-        notify('New message from ' + msg.message.display_name, msg.message.content.slice(0, 100));
-      }
+      else { S.dmUnread++; updateDmBadge(); toast('💬 ' + msg.message.display_name + ': ' + msg.message.content.slice(0,50), 'info'); notify('New message from ' + msg.message.display_name, msg.message.content.slice(0,100)); }
+      break;
+    case 'new_group_msg':
+      loadAllDMs();
+      if (S.curGroupId === msg.group_id) appendMsg(msg.message);
+      else { S.dmUnread++; updateDmBadge(); toast('👥 ' + msg.message.display_name + ' (group): ' + msg.message.content.slice(0,40), 'info'); }
+      break;
+    case 'new_group': case 'group_invite':
+      loadAllDMs(); toast('👥 Added to group: ' + (msg.group?.name || msg.group_name || 'a group'), 'info');
       break;
     case 'friend_request':
       S.pendingCount++;
@@ -1082,6 +1216,10 @@ function handlePush(msg) {
     case 'friend_accepted':
       toast('✅ ' + msg.by.display_name + ' accepted your friend request', 'ok');
       loadFriendsSidebar();
+      break;
+    case 'presence':
+      // A friend came online or went offline — update their status everywhere
+      updatePresence(msg.userId, msg.status);
       break;
     case 'call_ring':
       S.callId = msg.callId; S.callRole = 'callee';
@@ -1384,7 +1522,7 @@ let _lastDateStr = '';
 
 async function selectChannel(id) {
   const ch = S.channels.find(c => c.id === id); if (!ch || ch.type === 'voice') return;
-  S.curCh = ch; S.curDmId = null; S.curDmUser = null;
+  S.curCh = ch; S.curDmId = null; S.curGroupId = null; S.curDmUser = null;
   document.getElementById('chat-icon').textContent = '#';
   document.getElementById('chat-name').textContent = ch.name;
   document.getElementById('chat-topic').textContent = ch.topic || '';
@@ -1415,8 +1553,11 @@ function appendMsg(msg, scroll = true) {
   }
   const div = document.createElement('div'); div.className = 'msg'; div.id = 'msg-' + msg.id;
   const mine = msg.author_id === S.user?.id;
+  const avHtml = msg.avatar_url
+    ? `<div class="msg-av" style="overflow:hidden;padding:0;" onclick="showProfile('${esc(msg.username)}',event)"><img src="${esc(msg.avatar_url)}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" onerror="this.parentNode.style.background='${msg.avatar_color}';this.parentNode.innerHTML='${esc(msg.display_name[0].toUpperCase())}';"/></div>`
+    : `<div class="msg-av" style="background:${msg.avatar_color};" onclick="showProfile('${esc(msg.username)}',event)">${msg.display_name[0].toUpperCase()}</div>`;
   div.innerHTML = `
-    <div class="msg-av" style="background:${msg.avatar_color};" onclick="showProfile('${esc(msg.username)}',event)">${msg.display_name[0].toUpperCase()}</div>
+    ${avHtml}
     <div class="msg-body">
       <div class="msg-meta">
         <span class="msg-author" style="color:${msg.avatar_color};" onclick="showProfile('${esc(msg.username)}',event)">${esc(msg.display_name)}</span>
@@ -1440,7 +1581,12 @@ async function sendMsg() {
   const content = inp.value.trim(); if (!content) return;
   inp.value = ''; _lastDateStr = '';
   try {
-    if (S.curDmId) {
+    if (S.curGroupId) {
+      await apiFetch('POST', '/groups/' + S.curGroupId + '/messages', { content });
+      const msgs = await apiFetch('GET', '/groups/' + S.curGroupId + '/messages');
+      const c = document.getElementById('msgs'); c.innerHTML = ''; _lastDateStr = '';
+      msgs.forEach(m => appendMsg(m, false)); c.scrollTop = c.scrollHeight;
+    } else if (S.curDmId) {
       await apiFetch('POST', '/dms/' + S.curDmId + '/messages', { content });
       const msgs = await apiFetch('GET', '/dms/' + S.curDmId + '/messages');
       const c = document.getElementById('msgs'); c.innerHTML = ''; _lastDateStr = '';
@@ -1465,10 +1611,20 @@ async function showDMs() {
   fpTab('all', document.getElementById('fp-tab-all'));
 }
 
-async function loadDMs() {
-  S.allDms = await apiFetch('GET', '/dms');
+async function loadAllDMs() {
+  const [dms, groups] = await Promise.all([
+    apiFetch('GET', '/dms'),
+    apiFetch('GET', '/groups').catch(() => []),
+  ]);
+  S.allDms = [
+    ...dms,
+    ...groups.map(g => ({ ...g, type: 'group' })),
+  ].sort((a, b) => (b.last_msg_at || 0) - (a.last_msg_at || 0));
   renderDMList(S.allDms);
 }
+
+// Keep old name as alias
+function loadDMs() { return loadAllDMs(); }
 
 function renderDMList(dms) {
   const el = document.getElementById('dm-list'); el.innerHTML = '';
@@ -1477,21 +1633,42 @@ function renderDMList(dms) {
     return;
   }
   dms.forEach(dm => {
-    const o = dm.other_user;
+    const isGroup = dm.type === 'group';
     const div = document.createElement('div');
-    div.className = 'dm-item' + (S.curDmId === dm.id ? ' active' : '');
-    div.innerHTML = `
-      <div class="dm-av-wrap">
-        <div class="dm-av" style="background:${o.avatar_color};">${o.display_name[0].toUpperCase()}</div>
-        <div class="dm-status ${o.status==='online'?'online':'offline'}"></div>
-      </div>
-      <div class="dm-info">
-        <div class="dm-name">${esc(o.display_name)}</div>
-        <div class="dm-prev">${dm.last_msg ? esc(dm.last_msg.slice(0,40)) : 'Start a conversation'}</div>
-      </div>
-      <div class="dm-call-btn" onclick="event.stopPropagation();callUser(${o.id})" title="Call">📞</div>
-    `;
-    div.onclick = () => openDM(dm.id, o);
+    const isActive = isGroup ? S.curGroupId === dm.id : S.curDmId === dm.id;
+    div.className = 'dm-item' + (isActive ? ' active' : '');
+
+    if (isGroup) {
+      const members = dm.members || [];
+      const preview = dm.last_msg ? esc(dm.last_msg.slice(0, 40)) : 'No messages yet';
+      div.innerHTML = `
+        <div class="dm-av-wrap">
+          <div class="dm-av" style="background:var(--accent);font-size:16px;">👥</div>
+        </div>
+        <div class="dm-info">
+          <div class="dm-name">${esc(dm.name)}</div>
+          <div class="dm-prev">${preview} · ${members.length} members</div>
+        </div>
+      `;
+      div.onclick = () => openGroupDM(dm);
+    } else {
+      const o = dm.other_user;
+      div.innerHTML = `
+        <div class="dm-av-wrap">
+          ${o.avatar_url
+            ? `<div class="dm-av" style="overflow:hidden;padding:0;"><img src="${esc(o.avatar_url)}" style="width:100%;height:100%;object-fit:cover;" onerror="this.parentNode.style.background='${o.avatar_color}';this.parentNode.innerHTML='${esc(o.display_name[0].toUpperCase())}';this.parentNode.style.display='flex';this.parentNode.style.alignItems='center';this.parentNode.style.justifyContent='center';this.parentNode.style.fontSize='13px';this.parentNode.style.fontWeight='700';this.parentNode.style.color='#fff';"/></div>`
+            : `<div class="dm-av" style="background:${o.avatar_color};">${o.display_name[0].toUpperCase()}</div>`
+          }
+          <div class="dm-status ${o.status==='online'?'online':'offline'}"></div>
+        </div>
+        <div class="dm-info">
+          <div class="dm-name">${esc(o.display_name)}</div>
+          <div class="dm-prev">${dm.last_msg ? esc(dm.last_msg.slice(0,40)) : 'Start a conversation'}</div>
+        </div>
+        <div class="dm-call-btn" onclick="event.stopPropagation();callUser(${o.id})" title="Call">📞</div>
+      `;
+      div.onclick = () => openDM(dm.id, o);
+    }
     el.appendChild(div);
   });
 }
@@ -1499,11 +1676,15 @@ function renderDMList(dms) {
 function filterDMs(q) {
   if (!q) { renderDMList(S.allDms); return; }
   const lq = q.toLowerCase();
-  renderDMList(S.allDms.filter(dm => dm.other_user.display_name.toLowerCase().includes(lq) || dm.other_user.username.toLowerCase().includes(lq)));
+  renderDMList(S.allDms.filter(dm => {
+    if (dm.type === 'group') return dm.name.toLowerCase().includes(lq);
+    const o = dm.other_user;
+    return o.display_name.toLowerCase().includes(lq) || o.username.toLowerCase().includes(lq);
+  }));
 }
 
 async function openDM(dmId, other) {
-  S.curDmId = dmId; S.curCh = null; S.curDmUser = other;
+  S.curDmId = dmId; S.curGroupId = null; S.curCh = null; S.curDmUser = other;
   document.getElementById('chat-icon').textContent = '@';
   document.getElementById('chat-name').textContent = other.display_name;
   document.getElementById('chat-topic').textContent = other.username;
@@ -1553,6 +1734,99 @@ function searchNewDM(q) {
         : '<div style="color:var(--text3);font-size:13px;">No users found</div>';
     } catch {}
   }, 300);
+}
+
+// ── Group DMs ─────────────────────────────────────────────────────────────────
+async function openGroupDM(group) {
+  S.curGroupId = group.id; S.curDmId = null; S.curCh = null; S.curDmUser = null;
+  document.getElementById('chat-icon').textContent = '👥';
+  document.getElementById('chat-name').textContent = group.name;
+  const memberNames = (group.members || []).map(m => m.display_name).join(', ');
+  document.getElementById('chat-topic').textContent = memberNames;
+  document.getElementById('msg-inp').placeholder = 'Message ' + group.name + '…';
+  document.getElementById('call-hdr-btn').style.display = 'none';
+  setView('chat'); await loadAllDMs(); _lastDateStr = '';
+  const msgs = await apiFetch('GET', '/groups/' + group.id + '/messages');
+  const c = document.getElementById('msgs'); c.innerHTML = ''; _lastDateStr = '';
+  msgs.forEach(m => appendMsg(m, false)); c.scrollTop = c.scrollHeight;
+}
+
+function showNewGroup() {
+  showModal('New Group Chat', `
+    <label class="lbl">Group Name *</label>
+    <input id="ng-name" class="inp" placeholder="e.g. Weekend Plans" style="margin-top:4px;">
+    <label class="lbl" style="margin-top:12px;">Add Members (search by username)</label>
+    <div style="display:flex;gap:8px;margin-top:4px;">
+      <input id="ng-search" class="inp" placeholder="Search users…" oninput="ngSearch(this.value)" style="flex:1;">
+    </div>
+    <div id="ng-results" style="margin-top:8px;max-height:150px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;"></div>
+    <div style="margin-top:10px;">
+      <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Added Members</div>
+      <div id="ng-added" style="display:flex;flex-wrap:wrap;gap:6px;min-height:28px;"></div>
+    </div>
+    <div class="err" id="ng-err"></div>
+  `, [
+    { label: 'Cancel', cls: 'btn-ghost', fn: closeModal },
+    { label: 'Create Group', fn: async () => {
+      const name = (document.getElementById('ng-name')?.value || '').trim();
+      const err = document.getElementById('ng-err');
+      if (!name) { if(err) err.textContent = 'Group name is required'; return; }
+      const ids = window._ngSelected ? Array.from(window._ngSelected) : [];
+      if (ids.length < 1) { if(err) err.textContent = 'Add at least 1 person'; return; }
+      try {
+        const group = await apiFetch('POST', '/groups', { name, user_ids: ids });
+        closeModal(); window._ngSelected = null;
+        await loadAllDMs();
+        openGroupDM(group);
+      } catch(e) { if(err) err.textContent = e.message; }
+    }},
+  ]);
+  window._ngSelected = new Set();
+  window._ngNames = {};
+}
+
+let _ngTO = null;
+function ngSearch(q) {
+  clearTimeout(_ngTO);
+  const el = document.getElementById('ng-results'); if (!el) return;
+  if (q.length < 2) { el.innerHTML = ''; return; }
+  _ngTO = setTimeout(async () => {
+    try {
+      const users = await apiFetch('GET', '/users/search?q=' + encodeURIComponent(q));
+      el.innerHTML = users.filter(u => u.id !== S.user?.id).map(u =>
+        `<div class="sr-row" style="cursor:pointer;" onclick="ngToggle(${u.id},'${esc(u.display_name)}',this)">
+          ${avatarEl(u.display_name[0].toUpperCase(), u.avatar_color, 32, 12)}
+          <div class="sr-info"><div class="sr-name">${esc(u.display_name)}</div><div class="sr-un">@${esc(u.username)}</div></div>
+          <span id="ng-check-${u.id}" style="color:var(--green);font-weight:700;"></span>
+        </div>`).join('') || '<div style="color:var(--text3);font-size:13px;padding:8px;">No users found</div>';
+      // Mark already-added
+      if (window._ngSelected) window._ngSelected.forEach(id => {
+        const ch = document.getElementById('ng-check-' + id);
+        if (ch) ch.textContent = '✓';
+      });
+    } catch {}
+  }, 300);
+}
+
+function ngToggle(id, name, row) {
+  if (!window._ngSelected) window._ngSelected = new Set();
+  if (window._ngSelected.has(id)) {
+    window._ngSelected.delete(id);
+    const ch = document.getElementById('ng-check-' + id); if(ch) ch.textContent = '';
+  } else {
+    window._ngSelected.add(id);
+    window._ngNames[id] = name;
+    const ch = document.getElementById('ng-check-' + id); if(ch) ch.textContent = '✓';
+  }
+  // Update added chips
+  const added = document.getElementById('ng-added'); if(!added) return;
+  added.innerHTML = '';
+  window._ngSelected.forEach(uid => {
+    const chip = document.createElement('div');
+    chip.style.cssText = 'background:var(--accent);color:#fff;border-radius:12px;padding:3px 10px;font-size:12px;font-weight:600;display:flex;align-items:center;gap:5px;cursor:pointer;';
+    chip.innerHTML = esc(window._ngNames[uid] || uid) + ' <span onclick="ngToggle(' + uid + ',\'\',null)" style="opacity:.7;font-size:10px;">✕</span>';
+    added.appendChild(chip);
+  });
 }
 
 // ── Friends ───────────────────────────────────────────────────────────────────
@@ -1717,7 +1991,7 @@ async function showProfile(username, event) {
     const u = await apiFetch('GET', '/users/' + encodeURIComponent(username));
     document.getElementById('pp-banner').style.background = `linear-gradient(135deg, ${u.avatar_color}, ${u.avatar_color}66)`;
     const av = document.getElementById('pp-av');
-    av.style.background = u.avatar_color; av.textContent = u.display_name[0].toUpperCase();
+    setAvatarEl(av, u.display_name[0].toUpperCase(), u.avatar_color, u.avatar_url || '');
     document.getElementById('pp-name').textContent = u.display_name;
     document.getElementById('pp-un').textContent = '@' + u.username;
     document.getElementById('pp-bio').textContent = u.bio || 'No bio set.';
@@ -1745,25 +2019,80 @@ function closeProfile() { document.getElementById('prof-pop').classList.remove('
 function showMyProfile(event) { if (S.user) showProfile(S.user.username, event); }
 
 function showEditProfile() {
+  const u = S.user || {};
+  const curAv = u.avatar_url || '';
   showModal('Edit Profile', `
+    <div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;">
+      <div id="ep-av-preview" style="width:72px;height:72px;border-radius:50%;overflow:hidden;flex-shrink:0;
+           background:${u.avatar_color || '#5865f2'};display:flex;align-items:center;justify-content:center;
+           font-size:28px;font-weight:700;color:#fff;cursor:pointer;position:relative;border:2px solid var(--border);"
+           onclick="document.getElementById('ep-file').click()" title="Click to change">
+        ${curAv ? `<img src="${esc(curAv)}" style="width:100%;height:100%;object-fit:cover;" id="ep-av-img"/>` : `<span id="ep-av-letter">${esc((u.display_name||u.username||'?')[0].toUpperCase())}</span>`}
+        <div style="position:absolute;inset:0;background:rgba(0,0,0,0);display:flex;align-items:center;justify-content:center;border-radius:50%;transition:.15s;" onmouseover="this.style.background='rgba(0,0,0,.45)'" onmouseout="this.style.background='rgba(0,0,0,0)'">
+          <span style="color:#fff;font-size:20px;opacity:0;" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0">📷</span>
+        </div>
+      </div>
+      <div style="flex:1;">
+        <div style="font-size:13px;font-weight:600;margin-bottom:4px;">Profile Picture</div>
+        <div style="font-size:12px;color:var(--text2);margin-bottom:8px;">Click avatar to upload (JPG, PNG, GIF · max 2MB)</div>
+        <input type="file" id="ep-file" accept="image/*" style="display:none;" onchange="ep_previewImage(this)">
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-ghost btn-xs" onclick="document.getElementById('ep-file').click()">📷 Upload</button>
+          <button class="btn btn-ghost btn-xs" onclick="ep_removeImage()">🗑️ Remove</button>
+        </div>
+      </div>
+    </div>
     <label class="lbl">Display Name</label>
-    <input id="ep-name" class="inp" value="${esc(S.user?.display_name || '')}" style="margin-top:4px;">
+    <input id="ep-name" class="inp" value="${esc(u.display_name || '')}" style="margin-top:4px;">
     <label class="lbl">Bio</label>
-    <input id="ep-bio" class="inp" value="${esc(S.user?.bio || '')}" placeholder="Tell people about yourself" style="margin-top:4px;">
+    <input id="ep-bio" class="inp" value="${esc(u.bio || '')}" placeholder="Tell people about yourself" style="margin-top:4px;">
+    <div class="err" id="ep-err" style="margin-top:8px;"></div>
   `, [
     { label: 'Cancel', cls: 'btn-ghost', fn: closeModal },
-    { label: 'Save', fn: async () => {
+    { label: 'Save Changes', fn: async () => {
+      const name = document.getElementById('ep-name').value.trim();
+      const bio  = document.getElementById('ep-bio').value.trim();
+      const err  = document.getElementById('ep-err');
+      err.textContent = '';
+      if (!name) { err.textContent = 'Display name is required.'; return; }
       try {
-        const u = await apiFetch('PATCH', '/me', {
-          display_name: document.getElementById('ep-name').value.trim(),
-          bio: document.getElementById('ep-bio').value.trim(),
-        });
-        S.user = u;
-        ['pan-name','pan-name2'].forEach(id => { const el=document.getElementById(id); if(el) el.textContent=u.display_name; });
-        closeModal(); toast('Profile updated', 'ok');
-      } catch(e) { toast(e.message, 'err'); }
+        const body = { display_name: name, bio, avatar_url: window._epAvatarData !== undefined ? window._epAvatarData : u.avatar_url };
+        const updated = await apiFetch('PATCH', '/me', body);
+        S.user = updated;
+        const L2 = (updated.display_name || updated.username)[0].toUpperCase();
+        ['pan-av','pan-av2'].forEach(id => setAvatarEl(document.getElementById(id), L2, updated.avatar_color, updated.avatar_url || ''));
+        ['pan-name','pan-name2'].forEach(id => { const el=document.getElementById(id); if(el) el.textContent=updated.display_name; });
+        window._epAvatarData = undefined;
+        closeModal(); toast('Profile updated!', 'ok');
+      } catch(e) { err.textContent = e.message; }
     }},
   ]);
+  window._epAvatarData = undefined; // reset on open
+}
+
+function ep_previewImage(input) {
+  const file = input.files[0]; if (!file) return;
+  if (file.size > 2 * 1024 * 1024) { toast('Image too large (max 2MB)', 'err'); return; }
+  const reader = new FileReader();
+  reader.onload = e => {
+    window._epAvatarData = e.target.result; // data URL
+    const preview = document.getElementById('ep-av-preview');
+    if (preview) {
+      preview.innerHTML = `<img src="${e.target.result}" style="width:100%;height:100%;object-fit:cover;" id="ep-av-img"/>
+        <div style="position:absolute;inset:0;background:rgba(0,0,0,0);display:flex;align-items:center;justify-content:center;border-radius:50%;transition:.15s;" onmouseover="this.style.background='rgba(0,0,0,.45)'" onmouseout="this.style.background='rgba(0,0,0,0)'"></div>`;
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+function ep_removeImage() {
+  window._epAvatarData = ''; // empty string = remove
+  const u = S.user || {};
+  const preview = document.getElementById('ep-av-preview');
+  if (preview) {
+    preview.style.background = u.avatar_color || '#5865f2';
+    preview.innerHTML = `<span id="ep-av-letter">${esc((u.display_name||u.username||'?')[0].toUpperCase())}</span>`;
+  }
 }
 
 // ── Voice ─────────────────────────────────────────────────────────────────────
@@ -1777,23 +2106,43 @@ async function joinVC(chId, name) {
   document.getElementById('vc-status').textContent = 'Connecting…';
   setView('voice'); renderChannels();
   try { S.localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false }); }
-  catch { S.localStream = null; document.getElementById('vc-status').textContent = '⚠️ Mic denied — you can still listen'; }
-  S.vcParts = { [S.user.id]: { id: S.user.id, display_name: S.user.display_name, avatar_color: S.user.avatar_color, muted: S.muted } };
-  renderVCParts();
+  catch { S.localStream = null; document.getElementById('vc-status').textContent = '⚠️ Mic denied'; }
+  S.vcParts = { [S.user.id]: { id: S.user.id, display_name: S.user.display_name, avatar_color: S.user.avatar_color, muted: S.muted, sharing: false } };
+  S.sharing = false; S.screenStream = null; S.incomingScreenStreams = {};
+  showVCPlaceholder(); renderVCStrip();
   const ws = new WebSocket(`${WS}/ws/voice/${chId}?token=${S.token}`);
-  ws.onopen = () => document.getElementById('vc-status').textContent = '✅ Connected';
+  ws.onopen = () => { document.getElementById('vc-status').textContent = '✅ Connected'; };
   ws.onmessage = async e => {
     const msg = JSON.parse(e.data);
-    if (msg.type === 'voice_peer_exists') { S.vcParts[msg.userId] = msg.userInfo; renderVCParts(); await vcOffer(msg.userId); }
-    else if (msg.type === 'voice_user_joined') { S.vcParts[msg.userId] = msg.userInfo; renderVCParts(); }
-    else if (msg.type === 'voice_user_left') {
+    if (msg.type === 'voice_peer_exists') {
+      S.vcParts[msg.userId] = msg.userInfo; renderVCStrip(); await vcOffer(msg.userId);
+    } else if (msg.type === 'voice_user_joined') {
+      S.vcParts[msg.userId] = msg.userInfo; renderVCStrip();
+      // If we're sharing, add our screen track to the new peer too
+      if (S.sharing && S.screenStream) await addScreenToPeer(msg.userId);
+    } else if (msg.type === 'voice_user_left') {
       delete S.vcParts[msg.userId];
+      delete S.incomingScreenStreams[msg.userId];
       if (S.vcPeers[msg.userId]) { S.vcPeers[msg.userId].close(); delete S.vcPeers[msg.userId]; }
-      renderVCParts();
+      // If they were sharing and now they're gone, hide screen
+      if (S.currentSharer === msg.userId) { S.currentSharer = null; hideScreenShare(); }
+      renderVCStrip();
+    } else if (msg.type === 'voice_mute_update') {
+      if (S.vcParts[msg.userId]) S.vcParts[msg.userId].muted = msg.muted;
+      renderVCStrip();
+    } else if (msg.type === 'voice_signal') {
+      await vcSignal(msg.fromUserId, msg.signal);
+    } else if (msg.type === 'screen_share_started') {
+      // A peer started sharing — update their badge
+      if (S.vcParts[msg.userId]) { S.vcParts[msg.userId].sharing = true; }
+      renderVCStrip();
+    } else if (msg.type === 'screen_share_stopped') {
+      if (S.vcParts[msg.userId]) { S.vcParts[msg.userId].sharing = false; }
+      if (S.currentSharer === msg.userId) { S.currentSharer = null; hideScreenShare(); }
+      renderVCStrip();
     }
-    else if (msg.type === 'voice_signal') await vcSignal(msg.fromUserId, msg.signal);
   };
-  ws.onclose = () => document.getElementById('vc-status').textContent = 'Disconnected';
+  ws.onclose = () => { document.getElementById('vc-status').textContent = 'Disconnected'; };
   S.vcWs = ws;
 }
 
@@ -1807,9 +2156,30 @@ async function vcOffer(pid) {
 function vcPC(pid) {
   if (S.vcPeers[pid]) S.vcPeers[pid].close();
   const pc = new RTCPeerConnection(ICE_CFG); S.vcPeers[pid] = pc;
+  // Add audio track
   if (S.localStream) S.localStream.getTracks().forEach(t => pc.addTrack(t, S.localStream));
-  pc.onicecandidate = e => { if (e.candidate) S.vcWs?.send(JSON.stringify({ type: 'voice_signal', toUserId: pid, signal: { type: 'candidate', candidate: e.candidate } })); };
-  pc.ontrack = e => { const a = new Audio(); a.srcObject = e.streams[0]; if (!S.deafened) a.play().catch(() => {}); };
+  // Add screen track if currently sharing
+  if (S.sharing && S.screenStream) S.screenStream.getTracks().forEach(t => pc.addTrack(t, S.screenStream));
+  pc.onicecandidate = e => {
+    if (e.candidate) S.vcWs?.send(JSON.stringify({ type: 'voice_signal', toUserId: pid, signal: { type: 'candidate', candidate: e.candidate } }));
+  };
+  pc.ontrack = e => {
+    const track = e.track;
+    const stream = e.streams[0];
+    if (track.kind === 'audio') {
+      // Audio — play it
+      const audio = new Audio(); audio.srcObject = stream;
+      if (!S.deafened) audio.play().catch(() => {});
+    } else if (track.kind === 'video') {
+      // Video — this is a screen share from this peer
+      // Figure out which user this came from by finding matching peer
+      const uid = Object.entries(S.vcPeers).find(([, p]) => p === pc)?.[0];
+      if (uid) {
+        S.incomingScreenStreams[uid] = stream;
+        showIncomingScreen(parseInt(uid), stream);
+      }
+    }
+  };
   return pc;
 }
 
@@ -1827,34 +2197,165 @@ async function vcSignal(from, sig) {
 }
 
 function leaveVC() {
+  stopScreenShare(false); // stop share silently
   if (S.vcWs) { S.vcWs.close(); S.vcWs = null; }
   if (S.localStream) { S.localStream.getTracks().forEach(t => t.stop()); S.localStream = null; }
   Object.values(S.vcPeers).forEach(pc => pc.close()); S.vcPeers = {};
-  S.vcParts = {}; S.vcCh = null; renderChannels(); setView('welcome');
+  S.vcParts = {}; S.vcCh = null; S.sharing = false; S.screenStream = null;
+  S.incomingScreenStreams = {}; S.currentSharer = null;
+  renderChannels(); setView('welcome');
 }
 
 function toggleMute() {
   S.muted = !S.muted;
   if (S.localStream) S.localStream.getAudioTracks().forEach(t => t.enabled = !S.muted);
   const btn = document.getElementById('vc-mute');
-  btn.textContent = S.muted ? '🔇' : '🎤'; btn.className = S.muted ? 'vc-btn active' : 'vc-btn normal';
+  btn.textContent = S.muted ? '🔇' : '🎤';
+  btn.className = S.muted ? 'vc-ctrl on' : 'vc-ctrl off';
   if (S.vcParts[S.user.id]) S.vcParts[S.user.id].muted = S.muted;
-  renderVCParts();
+  S.vcWs?.send(JSON.stringify({ type: 'voice_mute_update', muted: S.muted }));
+  renderVCStrip();
 }
+
 function toggleDeafen() {
   S.deafened = !S.deafened;
   const btn = document.getElementById('vc-deaf');
-  btn.textContent = S.deafened ? '🔇' : '🔊'; btn.className = S.deafened ? 'vc-btn active' : 'vc-btn normal';
+  btn.textContent = S.deafened ? '🔇' : '🔊';
+  btn.className = S.deafened ? 'vc-ctrl on' : 'vc-ctrl off';
 }
-function renderVCParts() {
-  const el = document.getElementById('vc-parts'); el.innerHTML = '';
+
+// ── Screen Sharing ────────────────────────────────────────────────────────────
+
+async function toggleScreenShare() {
+  if (S.sharing) { stopScreenShare(true); }
+  else { await startScreenShare(); }
+}
+
+async function startScreenShare() {
+  if (S.sharing) return;
+  try {
+    // Request screen capture
+    S.screenStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { cursor: 'always', frameRate: { ideal: 30 } },
+      audio: true, // capture system audio if allowed
+    });
+  } catch(e) {
+    if (e.name !== 'NotAllowedError') toast('Screen share failed: ' + e.message, 'err');
+    return; // user cancelled
+  }
+  S.sharing = true;
+  if (S.vcParts[S.user.id]) S.vcParts[S.user.id].sharing = true;
+
+  // Update share button
+  const btn = document.getElementById('vc-share');
+  btn.textContent = '🛑'; btn.className = 'vc-ctrl share-on';
+
+  // Show own screen locally
+  showOwnScreen();
+
+  // Notify peers via WS (they need to renegotiate to receive video)
+  S.vcWs?.send(JSON.stringify({ type: 'screen_share_started', userId: S.user.id }));
+
+  // Add screen video track to all existing peer connections
+  for (const pid of Object.keys(S.vcPeers)) {
+    await addScreenToPeer(parseInt(pid));
+  }
+
+  // When the user stops via browser UI (clicking "Stop sharing")
+  S.screenStream.getVideoTracks()[0].onended = () => { stopScreenShare(true); };
+
+  renderVCStrip();
+}
+
+async function addScreenToPeer(pid) {
+  const pc = S.vcPeers[pid]; if (!pc || !S.screenStream) return;
+  const videoTrack = S.screenStream.getVideoTracks()[0]; if (!videoTrack) return;
+  // Check if a video sender already exists
+  const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+  if (sender) {
+    await sender.replaceTrack(videoTrack);
+  } else {
+    pc.addTrack(videoTrack, S.screenStream);
+    // Renegotiate — send a new offer
+    const offer = await pc.createOffer(); await pc.setLocalDescription(offer);
+    S.vcWs?.send(JSON.stringify({ type: 'voice_signal', toUserId: pid, signal: { type: 'offer', sdp: offer.sdp } }));
+  }
+}
+
+function stopScreenShare(notify = true) {
+  if (!S.sharing && !S.screenStream) return;
+  if (S.screenStream) { S.screenStream.getTracks().forEach(t => t.stop()); S.screenStream = null; }
+  S.sharing = false;
+  if (S.vcParts[S.user.id]) S.vcParts[S.user.id].sharing = false;
+  // Remove video tracks from all peer connections
+  for (const pc of Object.values(S.vcPeers)) {
+    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+    if (sender) pc.removeTrack(sender);
+  }
+  const btn = document.getElementById('vc-share');
+  if (btn) { btn.textContent = '🖥️'; btn.className = 'vc-ctrl off'; }
+  if (notify) {
+    S.vcWs?.send(JSON.stringify({ type: 'screen_share_stopped', userId: S.user.id }));
+  }
+  if (S.currentSharer === S.user.id) { S.currentSharer = null; hideScreenShare(); }
+  renderVCStrip();
+}
+
+// ── Screen display ────────────────────────────────────────────────────────────
+let S_currentSharer_name = '';
+
+function showOwnScreen() {
+  S.currentSharer = S.user.id;
+  const video = document.getElementById('vc-screenshare-video');
+  video.srcObject = S.screenStream;
+  video.play().catch(() => {});
+  document.getElementById('vc-sharer-name').textContent = 'You';
+  document.getElementById('vc-screenshare-area').classList.add('active');
+  document.getElementById('vc-screenshare-placeholder').classList.add('hidden');
+}
+
+function showIncomingScreen(uid, stream) {
+  // Only show one screen at a time — last one wins
+  S.currentSharer = uid;
+  const sharer = S.vcParts[uid];
+  const video = document.getElementById('vc-screenshare-video');
+  video.srcObject = stream;
+  video.play().catch(() => {});
+  document.getElementById('vc-sharer-name').textContent = sharer?.display_name || 'Someone';
+  document.getElementById('vc-screenshare-area').classList.add('active');
+  document.getElementById('vc-screenshare-placeholder').classList.add('hidden');
+}
+
+function hideScreenShare() {
+  const video = document.getElementById('vc-screenshare-video');
+  video.srcObject = null;
+  document.getElementById('vc-screenshare-area').classList.remove('active');
+  document.getElementById('vc-screenshare-placeholder').classList.remove('hidden');
+}
+
+function showVCPlaceholder() {
+  document.getElementById('vc-screenshare-area').classList.remove('active');
+  document.getElementById('vc-screenshare-placeholder').classList.remove('hidden');
+}
+
+// ── Participant strip ─────────────────────────────────────────────────────────
+function renderVCStrip() {
+  const el = document.getElementById('vc-participants-strip'); if (!el) return;
+  el.innerHTML = '';
   Object.values(S.vcParts).forEach(p => {
-    el.innerHTML += `<div class="vc-part">
-      <div class="vc-pav${p.muted?' muted':''}" style="background:${p.avatar_color};">${p.display_name[0].toUpperCase()}</div>
-      <div class="vc-pname">${esc(p.display_name)}</div>
+    const isMe = p.id === S.user.id;
+    const sharing = p.sharing ? ' sharing' : '';
+    const muted   = p.muted   ? ' muted'   : '';
+    el.innerHTML += `<div class="vc-strip-part" title="${esc(p.display_name)}${p.sharing ? ' (sharing screen)' : ''}">
+      <div class="vc-strip-av${sharing}${muted}" style="background:${p.avatar_color};">
+        ${p.display_name[0].toUpperCase()}
+        ${p.sharing ? '<div style="position:absolute;bottom:-2px;right:-2px;font-size:11px;">🖥️</div>' : ''}
+      </div>
+      <div class="vc-strip-name">${esc(isMe ? 'You' : p.display_name)}</div>
     </div>`;
   });
 }
+
 
 // ── Direct Calls ──────────────────────────────────────────────────────────────
 async function callUser(userId) {
@@ -1900,16 +2401,21 @@ async function startActiveCall(callId, other) {
   S.callStart = Date.now();
   S.callTimer = setInterval(() => {
     const sec = Math.floor((Date.now() - S.callStart) / 1000);
-    document.getElementById('cb-dur').textContent = secFmt(sec);
+    const fmt = secFmt(sec);
+    document.getElementById('cb-dur').textContent = fmt;
+    const d2 = document.getElementById('cb-dur2'); if (d2) d2.textContent = fmt;
   }, 1000);
 }
 
 function endCall() {
   if (S.callWs) { S.callWs.close(); S.callWs = null; }
   if (S.callStream) { S.callStream.getTracks().forEach(t => t.stop()); S.callStream = null; }
+  if (S.callScreenStream) { S.callScreenStream.getTracks().forEach(t => t.stop()); S.callScreenStream = null; }
+  S.callSharing = false;
   Object.values(S.callPeers).forEach(pc => pc.close()); S.callPeers = {};
   clearInterval(S.callTimer); S.callTimer = null;
   document.getElementById('call-bar').classList.remove('show');
+  closeCallScreenOverlay();
   S.callActive = false; S.callId = null; S.callRole = null;
 }
 
@@ -1920,17 +2426,38 @@ async function callOffer(pid) {
 function callPC(pid) {
   if (S.callPeers[pid]) S.callPeers[pid].close();
   const pc = new RTCPeerConnection(ICE_CFG); S.callPeers[pid] = pc;
+  // Add audio track
   if (S.callStream) S.callStream.getTracks().forEach(t => pc.addTrack(t, S.callStream));
-  pc.onicecandidate = e => { if (e.candidate) S.callWs?.send(JSON.stringify({ type: 'call_signal', signal: { type: 'candidate', candidate: e.candidate } })); };
-  pc.ontrack = e => { const a = new Audio(); a.srcObject = e.streams[0]; a.play().catch(() => {}); };
+  // Add screen track if we're already sharing
+  if (S.callSharing && S.callScreenStream) {
+    S.callScreenStream.getVideoTracks().forEach(t => pc.addTrack(t, S.callScreenStream));
+  }
+  pc.onicecandidate = e => {
+    if (e.candidate) S.callWs?.send(JSON.stringify({ type: 'call_signal', signal: { type: 'candidate', candidate: e.candidate } }));
+  };
+  pc.ontrack = e => {
+    const track = e.track;
+    if (track.kind === 'audio') {
+      const a = new Audio(); a.srcObject = e.streams[0]; a.play().catch(() => {});
+    } else if (track.kind === 'video') {
+      // Peer is sharing their screen — show it
+      showCallIncomingScreen(e.streams[0]);
+    }
+  };
   return pc;
 }
+
 async function callSignal(fromId, sig) {
   const pcs = Object.values(S.callPeers);
   if (!S.callPeers[fromId] && sig.type === 'offer') {
     const pc = callPC(fromId);
     await pc.setRemoteDescription({ type: 'offer', sdp: sig.sdp });
     const ans = await pc.createAnswer(); await pc.setLocalDescription(ans);
+    S.callWs?.send(JSON.stringify({ type: 'call_signal', signal: { type: 'answer', sdp: ans.sdp } }));
+  } else if (sig.type === 'offer' && pcs.length) {
+    // Renegotiation (e.g. screen share added)
+    await pcs[0].setRemoteDescription({ type: 'offer', sdp: sig.sdp });
+    const ans = await pcs[0].createAnswer(); await pcs[0].setLocalDescription(ans);
     S.callWs?.send(JSON.stringify({ type: 'call_signal', signal: { type: 'answer', sdp: ans.sdp } }));
   } else if (sig.type === 'answer' && pcs.length) {
     await pcs[0].setRemoteDescription({ type: 'answer', sdp: sig.sdp });
@@ -1941,7 +2468,104 @@ async function callSignal(fromId, sig) {
 function toggleCallMute() {
   S.callMuted = !S.callMuted;
   if (S.callStream) S.callStream.getAudioTracks().forEach(t => t.enabled = !S.callMuted);
-  document.getElementById('cb-mute-btn').textContent = S.callMuted ? '🔇 Unmute' : '🎤 Mute';
+  const label = S.callMuted ? '🔇 Unmute' : '🎤 Mute';
+  document.getElementById('cb-mute-btn').textContent = label;
+  const cb2 = document.getElementById('css-mute-btn'); if (cb2) cb2.textContent = label;
+}
+
+// ── Call Screen Sharing ───────────────────────────────────────────────────────
+async function toggleCallScreenShare() {
+  if (S.callSharing) { stopCallScreenShare(); }
+  else { await startCallScreenShare(); }
+}
+
+async function startCallScreenShare() {
+  if (S.callSharing || !S.callActive) return;
+  try {
+    S.callScreenStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { cursor: 'always', frameRate: { ideal: 30 } },
+      audio: true,
+    });
+  } catch(e) {
+    if (e.name !== 'NotAllowedError') toast('Screen share failed: ' + e.message, 'err');
+    return;
+  }
+  S.callSharing = true;
+  updateCallShareBtn(true);
+
+  // Show own screen in the overlay
+  showCallOwnScreen();
+
+  // Add video track to existing peer connections and renegotiate
+  for (const [pid, pc] of Object.entries(S.callPeers)) {
+    const videoTrack = S.callScreenStream.getVideoTracks()[0];
+    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+    if (sender) {
+      await sender.replaceTrack(videoTrack);
+    } else {
+      pc.addTrack(videoTrack, S.callScreenStream);
+      const offer = await pc.createOffer(); await pc.setLocalDescription(offer);
+      S.callWs?.send(JSON.stringify({ type: 'call_signal', signal: { type: 'offer', sdp: offer.sdp } }));
+    }
+  }
+
+  // Auto-stop when user clicks "Stop sharing" in browser
+  S.callScreenStream.getVideoTracks()[0].onended = () => stopCallScreenShare();
+}
+
+function stopCallScreenShare() {
+  if (!S.callSharing) return;
+  if (S.callScreenStream) { S.callScreenStream.getTracks().forEach(t => t.stop()); S.callScreenStream = null; }
+  S.callSharing = false;
+  updateCallShareBtn(false);
+  // Remove video senders
+  for (const pc of Object.values(S.callPeers)) {
+    const sender = pc.getSenders().find(s => s.track?.kind === 'video');
+    if (sender) pc.removeTrack(sender);
+  }
+  // If we're showing our own screen in the overlay, close it
+  const video = document.getElementById('call-screen-video');
+  if (video && video.srcObject) {
+    // Only close overlay if we were showing our own stream
+    closeCallScreenOverlay();
+  }
+}
+
+function updateCallShareBtn(sharing) {
+  ['cb-share-btn','css-share-btn'].forEach(id => {
+    const b = document.getElementById(id);
+    if (!b) return;
+    b.textContent = sharing ? '🛑 Stop Share' : '🖥️ Share';
+    b.className   = sharing ? 'btn btn-accent btn-sm' : 'btn btn-ghost btn-sm';
+  });
+}
+
+function showCallOwnScreen() {
+  const overlay = document.getElementById('call-screen-overlay');
+  const video   = document.getElementById('call-screen-video');
+  const label   = document.getElementById('css-label');
+  video.srcObject = S.callScreenStream;
+  video.play().catch(() => {});
+  if (label) label.textContent = '🖥️ You are sharing';
+  overlay.style.display = 'flex';
+}
+
+function showCallIncomingScreen(stream) {
+  const overlay = document.getElementById('call-screen-overlay');
+  const video   = document.getElementById('call-screen-video');
+  const label   = document.getElementById('css-label');
+  video.srcObject = stream;
+  video.play().catch(() => {});
+  if (label) label.textContent = '🖥️ ' + (S.curDmUser?.display_name || 'Other person') + ' is sharing';
+  overlay.style.display = 'flex';
+  toast('🖥️ Screen share started', 'info', 3000);
+}
+
+function closeCallScreenOverlay() {
+  const overlay = document.getElementById('call-screen-overlay');
+  const video   = document.getElementById('call-screen-video');
+  if (overlay) overlay.style.display = 'none';
+  if (video)   video.srcObject = null;
 }
 
 function showCallOverlay(dir, user) {
@@ -1972,7 +2596,50 @@ function setView(v) {
   document.getElementById('chat-view').style.display    = v === 'chat'    ? 'flex' : 'none';
   document.getElementById('vc-view').style.display      = v === 'voice'   ? 'flex' : 'none';
   document.getElementById('friends-view').style.display = v === 'friends' ? 'flex' : 'none';
+  // Ensure flex-direction is set correctly each time
+  if (v === 'chat')  document.getElementById('chat-view').style.flexDirection = 'column';
+  if (v === 'voice') document.getElementById('vc-view').style.flexDirection = 'column';
+  if (v === 'friends') document.getElementById('friends-view').style.flexDirection = 'column';
 }
+
+// ── Presence ──────────────────────────────────────────────────────────────────
+function updatePresence(userId, status) {
+  // Update in allDms list
+  S.allDms.forEach(dm => {
+    if (dm.other_user && dm.other_user.id === userId) dm.other_user.status = status;
+  });
+  // Update in friends list
+  S.friends.forEach(f => { if (f.other && f.other.id === userId) f.other.status = status; });
+  // Re-render dm list and friends sidebar without full reload
+  renderDMList(S.allDms);
+  const frList = document.getElementById('dm-fr-list');
+  if (frList && frList.children.length > 0) loadFriendsSidebar();
+  // Update dot in any open DM header
+  if (S.curDmId && S.curDmUser && S.curDmUser.id === userId) {
+    S.curDmUser.status = status;
+  }
+}
+
+// Page visibility — go offline when hidden, online when visible
+document.addEventListener('visibilitychange', () => {
+  if (!S.token || !S.userWs) return;
+  if (document.hidden) {
+    apiFetch('PATCH', '/me', { status: 'idle' }).catch(() => {});
+  } else {
+    apiFetch('PATCH', '/me', { status: 'online' }).catch(() => {});
+  }
+});
+
+// Tell server we're offline if page is closing
+window.addEventListener('beforeunload', () => {
+  if (S.token) {
+    // Use sendBeacon for reliability on page close
+    const url = API + '/logout';
+    const data = JSON.stringify({});
+    navigator.sendBeacon ? navigator.sendBeacon(url, new Blob([data], { type: 'application/json' }))
+                         : apiFetch('POST', '/logout').catch(() => {});
+  }
+});
 
 // ── Global events ─────────────────────────────────────────────────────────────
 document.addEventListener('click', e => {
@@ -2238,9 +2905,19 @@ const DEFAULT_SERVER = 'https://thl2lsbc-3000.use.devtunnels.ms';
     setBackend(srv, name || srv);
     if (token) {
       S.token = token;
-      apiFetch('GET', '/me')
-        .then(u => { S.user = u; bootApp(); })
-        .catch(() => { S.token = null; LS.del('chord_token'); showAuth(); });
+      // Refresh the token to get a fresh 30-day expiry and latest user data
+      apiFetch('POST', '/auth/refresh')
+        .then(d => {
+          S.token = d.token; S.user = d.user;
+          LS.set('chord_token', d.token);
+          bootApp();
+        })
+        .catch(() => {
+          // Token may be expired — try /me as fallback
+          apiFetch('GET', '/me')
+            .then(u => { S.user = u; bootApp(); })
+            .catch(() => { S.token = null; LS.del('chord_token'); showAuth(); });
+        });
       return;
     }
     showAuth(); return;
@@ -2270,8 +2947,8 @@ class FrontendHandler(http.server.BaseHTTPRequestHandler):
 
 
 def start_frontend_server():
-    """Start a local HTTP server for the frontend on a random free port."""
-    port = find_free_port()
+    """Start the frontend HTTP server on the fixed port so localStorage persists."""
+    port = get_frontend_port()
     httpd = socketserver.TCPServer(('127.0.0.1', port), FrontendHandler)
     httpd.allow_reuse_address = True
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -2280,20 +2957,41 @@ def start_frontend_server():
     return port
 
 
+def make_tray_icon():
+    """Create a simple lightning bolt icon for the system tray."""
+    try:
+        from PIL import Image, ImageDraw
+        img = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        # Dark background circle
+        draw.ellipse([2, 2, 62, 62], fill=(13, 14, 16, 255))
+        # Lightning bolt in accent colour
+        bolt = [(32, 4), (18, 34), (30, 34), (20, 60), (46, 26), (34, 26), (44, 4)]
+        draw.polygon(bolt, fill=(88, 101, 242, 255))
+        return img
+    except Exception:
+        # Fallback: plain coloured square
+        try:
+            from PIL import Image
+            img = Image.new('RGB', (64, 64), (88, 101, 242))
+            return img
+        except Exception:
+            return None
+
+
 def run():
     print('=' * 52)
     print('  ⚡ Chord — Desktop Client')
     print('=' * 52)
 
-    # Try to start the local Chord backend
+    # Start Chord backend
     js = resource_path('server.js')
     if os.path.exists(js):
         print('[chord] Starting local backend…')
-        ok = start_backend()
-        if not ok:
-            print('[chord] Local backend unavailable — user can connect to a remote server.')
+        if not start_backend():
+            print('[chord] Local backend unavailable — connect to a remote server.')
     else:
-        print('[chord] No server.js found — remote-only mode.')
+        print('[chord] No server.js — remote-only mode.')
 
     # Start frontend HTTP server
     fe_port = start_frontend_server()
@@ -2302,24 +3000,85 @@ def run():
     try:
         import webview
     except ImportError:
-        print('\n❌  pywebview not installed.  Run:  pip install pywebview\n')
-        # Fallback: just open in the system browser
+        print('\n❌  pip install pywebview\n')
         import webbrowser
         webbrowser.open(frontend_url)
         input('Press Enter to exit…')
         stop_backend()
         return
 
-    webview.create_window(
+    # ── Tray setup ────────────────────────────────────────────────────────────
+    _window = [None]   # mutable reference so callbacks can access it
+    _tray   = [None]
+
+    def show_window():
+        w = _window[0]
+        if w:
+            try: w.show(); w.restore()
+            except Exception: pass
+
+    def quit_app(icon=None, item=None):
+        stop_backend()
+        try:
+            if _tray[0]: _tray[0].stop()
+        except Exception: pass
+        try:
+            if _window[0]: _window[0].destroy()
+        except Exception: pass
+        sys.exit(0)
+
+    def on_closed():
+        """Called when the user clicks X — hide to tray instead of quitting."""
+        w = _window[0]
+        if w:
+            try: w.hide()
+            except Exception: pass
+        return False  # returning False prevents webview from destroying the window
+
+    # Build tray
+    tray_ok = False
+    try:
+        import pystray
+        icon_img = make_tray_icon()
+        if icon_img:
+            menu = pystray.Menu(
+                pystray.MenuItem('Open Chord', lambda icon, item: show_window(), default=True),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem('Quit', quit_app),
+            )
+            tray_icon = pystray.Icon('Chord', icon_img, 'Chord', menu)
+            _tray[0] = tray_icon
+            # Run tray in background thread
+            t = threading.Thread(target=tray_icon.run, daemon=True)
+            t.start()
+            tray_ok = True
+            print('[chord] System tray active — close window to minimise to tray')
+    except ImportError:
+        print('[chord] pystray not installed — no system tray (pip install pystray pillow)')
+    except Exception as e:
+        print(f'[chord] Tray error: {e}')
+
+    # ── Create window ─────────────────────────────────────────────────────────
+    win = webview.create_window(
         title='Chord',
-        url=frontend_url,           # ← real HTTP URL, not inline HTML
+        url=frontend_url,
         width=1340, height=840,
         min_size=(960, 640),
         resizable=True,
         background_color='#0d0e10',
     )
+    _window[0] = win
+
+    if tray_ok:
+        win.events.closed += on_closed
+
     webview.start(debug=False)
+
+    # webview.start() returned — user quit via tray or window was destroyed
     stop_backend()
+    try:
+        if _tray[0]: _tray[0].stop()
+    except Exception: pass
 
 
 if __name__ == '__main__':

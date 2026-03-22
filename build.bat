@@ -1,0 +1,1 @@
+pyinstaller --onefile --windowed --name Chord app.py
